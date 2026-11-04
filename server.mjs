@@ -425,10 +425,11 @@ async function work() {
       draftOf = { base: null, blocks: 0 };
       draftVersion = cur;
       const rules = q.activeRules.all();   // as numbered in this prompt; END RULE: n refers to rules[n - 1]
+      const lore = q.activeLore.all();     // likewise FORGET LORE: n refers to lore[n - 1]
       const context = {
         version: cur.id,
         rules,
-        lore: q.activeLore.all(),
+        lore,
         era: eras().at(-1),
         mine: q.memoryMine.all(job.ip_hash, job.id, Date.now() - MEMORY_MINE_MINUTES * 60_000, MEMORY_MINE).reverse(),
         others: q.memoryOthers.all(job.ip_hash, job.id, MEMORY_OTHERS).reverse(),
@@ -499,7 +500,7 @@ async function work() {
         const ruleNote = applyRuleChanges(r.rules, rules, job, Number(lastInsertRowid), now);
         if (ruleNote) console.log(`#${job.id} rules: ${forLog(ruleNote)}`);
         // An era's own LORE line only restates the era, which every prompt already gives.
-        const loreNote = job.kind === "era" ? "" : addLore(r.rules?.lore, job, Number(lastInsertRowid), now);
+        const loreNote = job.kind === "era" ? "" : addLore(r.rules, lore, job, Number(lastInsertRowid), now);
         if (loreNote) console.log(`#${job.id} lore: ${forLog(loreNote)}`);
         if (job.kind === "era") {
           const name = r.rules?.era ? cleanInput(r.rules.era).slice(0, ERA_CAP) : null;
@@ -577,19 +578,27 @@ function applyRuleChanges(changes, shown, job, versionId, now) {
   return notes.join("; ");
 }
 
-// A finished version's lore line, if any: saved (unless it's already known), and the oldest fades past LORE_MAX.
-function addLore(raw, job, versionId, now) {
-  const text = raw ? cleanInput(raw).slice(0, LORE_CAP) : "";
-  if (!text) return "";
-  const active = q.activeLore.all();
-  if (active.some((l) => l.text.toLowerCase() === text.toLowerCase())) return "";
-  const notes = [`new "${text}"`];
+// A finished version's lore: pieces it forgot (by their number in its prompt), then its new lore line, if any, saved
+// unless it's already known, with the oldest fading past LORE_MAX. Returns a note for the log.
+function addLore(changes, shown, job, versionId, now) {
+  const forget = changes?.forget ?? [];
+  const text = changes?.lore ? cleanInput(changes.lore).slice(0, LORE_CAP) : "";
+  if (!text && !forget.length) return "";
+  const notes = [];
   db.exec("BEGIN");
   try {
-    q.insertLore.run(text, job.text, job.id, versionId, job.ip_hash, now);
-    for (const old of active.slice(0, Math.max(0, active.length + 1 - LORE_MAX))) {
-      q.endLore.run("faded", now, `limit, by #${job.id}`, old.id);
-      notes.push(`faded "${old.text}"`);
+    for (const n of forget) {
+      const l = shown[n - 1];
+      if (l && q.endLore.run("removed", now, `suggestion #${job.id}`, l.id).changes) notes.push(`forgot "${l.text}"`);
+    }
+    const active = q.activeLore.all();
+    if (text && !active.some((l) => l.text.toLowerCase() === text.toLowerCase())) {
+      q.insertLore.run(text, job.text, job.id, versionId, job.ip_hash, now);
+      notes.push(`new "${text}"`);
+      for (const old of active.slice(0, Math.max(0, active.length + 1 - LORE_MAX))) {
+        q.endLore.run("faded", now, `limit, by #${job.id}`, old.id);
+        notes.push(`faded "${old.text}"`);
+      }
     }
     db.exec("COMMIT");
   } catch (err) {

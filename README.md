@@ -74,7 +74,9 @@ starts its reply with `LORE: <the fact>`, saved if that version is published. Ev
 lore after the page, so the page keeps its own canon even after the element itself is gone. It costs no edit, only
 ~20 prompt tokens each. At most `LORE_MAX` (12); a new one fades out the oldest. Shown under "The page remembers" in
 the Rules panel; whoever suggested it (same IP) or the admin can remove it (Forget). The system prompt alone rarely
-got lore written, so a one-line reminder follows the suggestion in every prompt (`LORE_NOTE`).
+got lore written, so a one-line reminder follows the suggestion in every prompt (`LORE_NOTE`). Lore is numbered in the prompt, and a
+suggestion that asks to forget some writes `FORGET LORE: <n>` (at most two), which removes it once that version is
+published. Changes to the page itself (what was added or removed, rules, how scripts work) are not lore.
 
 **Eras.** Every `ERA_DAYS` (7) the server queues a suggestion of its own (`kind = 'era'`, shown as "A new week, a new
 era…"; the model gets `ERA_SUGGESTION`): a light tidy-up that keeps the page's character, and a name for the new era
