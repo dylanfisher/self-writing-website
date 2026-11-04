@@ -17,7 +17,7 @@ Security model and reasoning: `PLAN.md`. Day-to-day running: `README.md`.
       (`lsof -nP -iTCP:3000 -sTCP:LISTEN` must show nothing, or only `127.0.0.1:3000`). Then start with
       `./start-remote.sh tunnel …`. It sets `HOST=127.0.0.1` and `TRUST_PROXY=cloudflare`; the two only make sense
       together.
-- [ ] **Admin link kept private.** It's in `data/server.log` and `data/admin-token`. Anyone with it can restore
+- [ ] **Admin link kept private.** It's in `data/admin-token` (`scripts/admin-url.sh` prints the link; the log only shows it masked). Anyone with it can restore
       versions and skip rate limits. To rotate: stop the server, delete `data/admin-token`, start again.
       `data/server.log` should be `-rw-------` (`chmod 600 data/server.log`).
 - [ ] Fresh start if wanted: `scripts/reset.sh` (keeps a backup in `data/backups/`).
@@ -32,7 +32,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dylanfisher.self-rew
 launchctl bootout $A                                     # stop (it starts again at the next login while the plist is there)
 launchctl kickstart -k $A                                # full restart (new quick-tunnel URLs)
 launchctl print $A | grep -E '^\s+(state|pid) ='           # status
-grep -E '^(Public|admin)' data/server.log | tail -2      # current URLs and admin link
+grep -E '^(Public|main)' data/server.log | tail -2       # current URLs
+scripts/admin-url.sh                                    # admin link (secret)
 ```
 Don't also start it by hand (`nohup ./start-remote.sh tunnel …`): two copies would fight over the ports.
 - **Crash:** the script restarts the server after 5 s; the tunnels stay up, so the URLs don't change.
@@ -44,7 +45,7 @@ Don't also start it by hand (`nohup ./start-remote.sh tunnel …`): two copies w
 
 | | Suggestion being written | Line | URLs | Downtime |
 |---|---|---|---|---|
-| `kill -USR2 <pid>` (code reload) | finishes first, then the restart | kept | same | ~6 s |
+| `kill -USR2 <pid>` (code reload) | finishes first, then the restart | kept | same | ~1 s |
 | crash | marked failed ("interrupted by a server restart") | kept | same | ~6 s |
 | `launchctl kickstart -k $A` / `bootout` | marked failed | kept | quick tunnels get new URLs | longer |
 | `scripts/reset.sh` | **not a restart: deletes all history** (backup in `data/backups/`) | | | |
@@ -54,7 +55,7 @@ Don't also start it by hand (`nohup ./start-remote.sh tunnel …`): two copies w
   anyway). A second USR2 restarts at once, failing the suggestion being written.
 - **An interrupted suggestion is never re-run.** It used to go back to the front of the line, so a suggestion that
   kept the model busy (or crashed the server) blocked the line on every restart.
-- **During the ~6 s gap** suggestions can't be sent (the box shows an error) and open pages reconnect by themselves.
+- **During the gap** (~1 s for a reload, ~6 s after a crash) suggestions can't be sent (the box shows an error) and open pages reconnect by themselves.
 - **Open pages reload themselves** when the site's own code changes: `public/` files (noticed within 5 s, no
   restart needed) or `lib/shim.js` (on restart). Changes to `server.mjs`/`lib/model.mjs` alone don't reload anyone.
   Someone typing a suggestion isn't interrupted: the reload waits until they leave the box, and their text is kept.

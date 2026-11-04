@@ -6,7 +6,7 @@ Read `README.md` (how it works), `LAUNCH.md` (running it, restarting) and `PLAN.
 ## It's live: people are using it
 
 - **Reloading code** (`server.mjs`, `lib/`): `kill -USR2 $(lsof -tiTCP:3000 -sTCP:LISTEN)`. It finishes the
-  suggestion being written, then restarts (~6 s) with the line and URLs kept. Never `launchctl kickstart -k` or
+  suggestion being written, then restarts (~1 s) with the line and URLs kept. Never `launchctl kickstart -k` or
   `bootout` for a code change: they fail the suggestion being written and restart the tunnels.
 - **`scripts/reset.sh` deletes all history.** It is not a restart. Only when the owner asks for a fresh start.
 - `public/` files are read per request, so they need no reload, and open pages reload themselves when they change
@@ -18,7 +18,8 @@ Read `README.md` (how it works), `LAUNCH.md` (running it, restarting) and `PLAN.
 ## Data
 
 - `data/site.db` (WAL). Tables: `suggestions` (queued | running | done | rejected | failed | removed), `versions`
-  (append-only; never edit or delete), `rules` (active | ended | evicted | removed). The server reads rules and the
+  (append-only; never edit or delete), `rules` (active | ended | evicted | removed), `lore` (active | faded | removed), `eras` (one row per era,
+  from its first version). `suggestions.kind` is `'era'` for the server's weekly era suggestion. The server reads rules and the
   line per suggestion, so a careful DB edit applies without a restart. Back up first:
   `sqlite3 data/site.db ".backup data/backups/<name>.db"`.
 - Don't put a version in by hand while a suggestion is running: it's built from the version before and would

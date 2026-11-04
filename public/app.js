@@ -76,6 +76,10 @@ function ensureLabel(id) {
 const latestId = () => S.current;
 const shownId = () => viewing ?? latestId();
 
+// A page on the sandbox origin. The shim's hash is in the URL because version pages are cached for good with the
+// shim inlined; a new shim needs new URLs.
+const sbx = (p) => `${S.sandboxOrigin}/${p}?db=${S.dbId}&s=${S.shim ?? ""}`;
+
 let frameTimer = null;
 // frameReady: the frame has loaded shownSrc (or was patched to it), so it can be patched again.
 // frameExact: what's on screen is exactly what loading shownSrc would show (a patch can be close but not exact).
@@ -88,7 +92,37 @@ function setFrame(src) {
   clearTimeout(frameTimer);
   frameTimer = setTimeout(() => { $("frame").src = src; }, $("frame").src ? 90 : 0);
 }
-$("frame").addEventListener("load", () => { frameReady = true; frameExact = true; });
+$("frame").addEventListener("load", () => { frameReady = true; frameExact = true; sendSite(true); sendCursors(); });
+
+// window.SITE in the frame (lib/shim.js): live facts the page's own scripts can use. Only what this page already
+// shows everyone; sent as data, and only again when it changed (or the frame loaded a new page).
+let siteSig = "";
+function sendSite(force = false) {
+  if (!S || !$("frame").src) return;
+  const draft = !!liveDraft();
+  const at = (v) => v.created_at;
+  const recent = [];
+  for (let id = latestId(); id >= S.first && recent.length < 10; id--) {
+    const v = versions.get(id);
+    if (v?.suggestion) recent.push({ text: v.suggestion, at: at(v) });
+  }
+  const data = {
+    viewers: S.viewers ?? 1,
+    version: draft ? latestId() + 1 : shownId(),
+    latest: latestId(),
+    draft,
+    writing: S.running ? { text: S.running.text, at: S.running.started_at } : null,
+    queue: S.queue.map((s) => ({ text: s.text, at: s.created_at })),
+    recent,
+    rules: (S.rules ?? []).map((r) => r.text),
+    lore: (S.lore ?? []).map((l) => l.text),
+    era: (() => { const e = eraOf(draft ? latestId() : shownId()); return e ? { n: e.n, name: e.name, at: e.started_at } : null; })(),
+  };
+  const sig = JSON.stringify(data);
+  if (sig === siteSig && !force) return;
+  siteSig = sig;
+  $("frame").contentWindow?.postMessage({ srp: "site", data }, "*");
+}
 // Replies from lib/shim.js in the frame. The page's own scripts could send these too; at worst a page isn't reloaded.
 addEventListener("message", (e) => {
   if (e.source !== $("frame").contentWindow || e.data?.srp !== "morphed") return;
@@ -97,15 +131,155 @@ addEventListener("message", (e) => {
   else frameExact = e.data.exact === true;
 });
 
+// ---------- other visitors' cursors ----------
+// The frame's shim reports where our pointer is on the page ({ srp: "pointer" }); we post it with what we're
+// looking at (cursorKey) to the server, which sends every page the cursors on the same one ("cursors" events).
+// Those go back into the frame, where the shim draws them. Only with a working event stream (it gives us the id
+// and token); a polling page shows none. Positions are page data, not trusted: the server checks them.
+// Over the shell's own controls, our cursor is { z, fx, fy } instead: a zone (data-cz in index.html: header, page
+// bar, scrub bar, sidebar) and where in its box. Those are the same on every version, so the server sends them to
+// every page ("chrome-cursors" events) and we draw them here, positioned in each zone as it is on this screen.
+let me = null;              // { id, token } from the stream's "hello"
+let cursorKey = null;       // "v<id>" or "d<suggestion id>" (a live draft); null: none
+let myCursor = null, cursorTimer = null, lastCursorPost = 0, cursorsData = null, chromeData = null;
+const hueOf = (id) => parseInt(String(id).slice(0, 6), 16) % 360 || 0;
+function pageKey() {
+  if (!S || !streamWorks || !me || document.hidden) return null;
+  return liveDraft() ? `d${S.running.id}` : `v${shownId()}`;
+}
+function postCursor() {
+  cursorTimer = null;
+  if (!me) return;
+  lastCursorPost = Date.now();
+  fetch("/api/cursor", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: me.token, k: cursorKey, c: myCursor && (myCursor.z || cursorKey) ? myCursor : null }) }).catch(() => {});
+}
+function queueCursor() {
+  cursorTimer ??= setTimeout(postCursor, Math.max(0, 130 - (Date.now() - lastCursorPost)));
+}
+function syncCursorKey() {
+  const k = pageKey();
+  if (k === cursorKey) return;
+  cursorKey = k;
+  if (!myCursor?.z || !k) myCursor = null;
+  queueCursor();
+  sendCursors();
+}
+function sendCursors() {
+  if (!$("frame").src) return;
+  const list = cursorsData && cursorsData.k === cursorKey && frameReady
+    ? cursorsData.list.filter((c) => c.id !== me?.id).map((c) => ({ ...c, hue: hueOf(c.id) }))
+    : [];
+  $("frame").contentWindow?.postMessage({ srp: "cursors", list }, "*");
+}
+addEventListener("message", (e) => {
+  if (e.source !== $("frame").contentWindow || e.data?.srp !== "pointer") return;
+  const d = e.data;
+  // "gone" can arrive after the shell already saw the pointer over its controls: it only clears a page cursor.
+  if (d.gone) { if (myCursor && !myCursor.z) myCursor = null; }
+  else myCursor = { p: String(d.p ?? "").slice(0, 200), fx: +d.fx || 0, fy: +d.fy || 0, x: +d.x || 0, y: +d.y || 0 };
+  if (me) queueCursor();
+});
+document.addEventListener("visibilitychange", () => syncCursorKey());
+
+// Our pointer over the shell's controls.
+function setChromeCursor(c) {
+  if (!c && !myCursor?.z) return;
+  myCursor = c;
+  if (me) queueCursor();
+}
+document.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch" || !e.isTrusted) return;
+  const z = e.target instanceof Element ? e.target.closest("[data-cz]") : null;
+  const r = z?.getBoundingClientRect();
+  if (!r?.width || !r.height) return setChromeCursor(null);
+  const f = (n) => Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000;
+  setChromeCursor({ z: z.dataset.cz, fx: f((e.clientX - r.left) / r.width), fy: f((e.clientY - r.top) / r.height) });
+}, { passive: true, capture: true });
+document.addEventListener("pointerout", (e) => {
+  if (e.pointerType !== "touch" && (!e.relatedTarget || e.relatedTarget === $("frame"))) setChromeCursor(null);
+});
+addEventListener("blur", () => setChromeCursor(null));
+
+// Others' cursors over the shell: a fixed layer above everything, positions recomputed each frame from the zones
+// (they move with scrolling and layout). A cursor in a zone that's hidden here (full-page mode) isn't shown.
+const chromeCursors = new Map();   // id → { el, z, fx, fy, x, y }
+let chromeLayer = null, chromeRaf = 0;
+function chromeArrow(hue) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 16 20");
+  svg.setAttribute("class", "rc");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "M1 1 L1 16 L5 12.5 L8 19 L10.5 18 L7.6 11.6 L13 11.6 Z");
+  path.setAttribute("fill", `hsl(${hue} 75% 52%)`);
+  path.setAttribute("stroke", "#fff");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+function chromeFrame() {
+  chromeRaf = 0;
+  let moving = false;
+  for (const c of chromeCursors.values()) {
+    if (c.left) continue;
+    const r = document.querySelector(`[data-cz="${c.z}"]`)?.getBoundingClientRect();
+    if (!r?.width || !r.height) { c.el.classList.add("gone"); c.x = null; continue; }
+    const tx = r.left + c.fx * r.width, ty = r.top + c.fy * r.height;
+    if (c.x === null) { c.x = tx; c.y = ty; }
+    c.x += (tx - c.x) * 0.3; c.y += (ty - c.y) * 0.3;
+    if (Math.abs(tx - c.x) > 0.3 || Math.abs(ty - c.y) > 0.3) moving = true;
+    c.el.classList.remove("gone");
+    c.el.style.transform = `translate(${c.x.toFixed(1)}px,${c.y.toFixed(1)}px)`;
+  }
+  if (moving) chromeTick();
+}
+const chromeTick = () => { if (!chromeRaf && chromeCursors.size) chromeRaf = requestAnimationFrame(chromeFrame); };
+addEventListener("scroll", chromeTick, { passive: true, capture: true });
+addEventListener("resize", chromeTick);
+setInterval(chromeTick, 500);
+function renderChromeCursors() {
+  if (!chromeLayer) {
+    chromeLayer = h("div", { class: "remote-cursors" });
+    chromeLayer.setAttribute("aria-hidden", "true");
+    document.body.append(chromeLayer);
+  }
+  const zones = new Set(["top", "bar", "scrub", "side"]);
+  const list = streamWorks && !document.hidden && chromeData ? chromeData.list : [];
+  const now = new Set();
+  for (const c of list.slice(0, 50)) {
+    const id = String(c?.id ?? "");
+    if (!id || id === me?.id || now.has(id) || !zones.has(c.z)) continue;
+    now.add(id);
+    let k = chromeCursors.get(id);
+    if (!k) {
+      k = { el: chromeArrow(hueOf(id)), x: null, y: null };
+      chromeCursors.set(id, k);
+      chromeLayer.append(k.el);
+    }
+    clearTimeout(k.drop);
+    k.left = false;
+    Object.assign(k, { z: c.z, fx: Math.min(1, Math.max(0, +c.fx || 0)), fy: Math.min(1, Math.max(0, +c.fy || 0)) });
+  }
+  for (const [id, k] of chromeCursors) {
+    if (now.has(id) || k.left) continue;
+    k.left = true;   // fade out, then drop
+    k.el.classList.add("gone");
+    k.drop = setTimeout(() => { k.el.remove(); chromeCursors.delete(id); }, 450);
+  }
+  chromeTick();
+}
+
 // Live drafts: the frame patches itself from the draft on screen to the next one instead of reloading
 // (lib/shim.js). The HTML is model output: it's only ever handed to the sandboxed frame, never used here.
 let draftData = null;   // the latest "draft" event: { draft, prev, version, from, html }
 let morphTimer = null;
 function showDraft(n) {
-  const src = `${S.sandboxOrigin}/d/${n}?db=${S.dbId}`;
+  const src = sbx(`d/${n}`);
   if (src === shownSrc) return;
   const d = draftData?.draft === n ? draftData : null;
-  const from = d && `${S.sandboxOrigin}/${d.prev ? `d/${d.prev}` : `v/${d.version}`}?db=${S.dbId}`;
+  const from = d && sbx(d.prev ? `d/${d.prev}` : `v/${d.version}`);
   if (!d || !frameReady || shownSrc !== from) return setFrame(src);
   clearTimeout(frameTimer);
   shownSrc = src;
@@ -132,6 +306,7 @@ function liveDraft() {
 }
 
 function renderStage() {
+  syncCursorKey();
   const id = shownId();
   const v = versions.get(id);
   const draft = liveDraft();
@@ -144,9 +319,9 @@ function renderStage() {
     $("to-latest").hidden = true;
     return;
   }
-  const src = `${S.sandboxOrigin}/v/${id}?db=${S.dbId}`;
+  const src = sbx(`v/${id}`);
   // The finished version is exactly the draft on screen: keep it (same page, same origin and CSP), no reload.
-  if (S.drafted?.version === id && frameExact && shownSrc === `${S.sandboxOrigin}/d/${S.drafted.draft}?db=${S.dbId}`) {
+  if (S.drafted?.version === id && frameExact && shownSrc === sbx(`d/${S.drafted.draft}`)) {
     shownSrc = src;
   } else setFrame(src);
 
@@ -182,7 +357,9 @@ let historySig = "";
 function renderHistory(force = false) {
   $("history-count").textContent = S.total;
   // Polling re-sends the state every few seconds; only rebuild the list when it changed (or to refresh times).
-  const sig = `${S.current}|${listOldest}|${versions.size}|${S.history.filter((v) => v.broken).length}|${!!admin}`;
+  // (S.history is only the newest few after the first state; versions has them all, and never change once written.)
+  const sig = `${S.current}|${listOldest}|${versions.size}|${!!admin}|${(S.eras ?? []).length}`;
+  const eraStarts = new Map((S.eras ?? []).map((e) => [e.version_id, e]));
   if (sig === historySig && !force) return;
   historySig = sig;
   const rows = [];
@@ -193,6 +370,7 @@ function renderHistory(force = false) {
       h("button", { class: "row", type: "button", onclick: () => show(v.id) },
         h("span", { class: "vid" }, `v${v.id}`),
         h("span", { class: "s" },
+          eraStarts.has(v.id) ? h("span", { class: "era-tag", title: `A new era began here, ${new Date(eraStarts.get(v.id).started_at).toLocaleDateString()}` }, eraName(eraStarts.get(v.id))) : null,
           v.broken ? h("span", { class: "broken" }, "⚠ ") : null, label(v)),
         h("span", { class: "tag when" }, ago(v.created_at))),
       h("button", { class: "btn small restore", type: "button", hidden: true, onclick: () => restore(v.id) },
@@ -229,7 +407,7 @@ function showVtip(row) {
         h("span", { class: "when" }, `${ago(v.created_at)} · ${new Date(v.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`)),
       h("div", { class: "vtip-text" }, v.suggestion ? `“${v.suggestion}”` : label(v)),
       steps.length ? h("ol", { class: "steps" }, ...steps.map((s) => h("li", {}, s))) : null,
-      h("div", { class: "vtip-meta" }, meta),
+      h("div", { class: "vtip-meta" }, [eraOf(id) ? eraName(eraOf(id)) : null, meta].filter(Boolean).join(" · ")),
       v.broken ? h("div", { class: "vtip-warn" }, "⚠ This version has a JavaScript error.") : null,
     ].filter(Boolean));
   }
@@ -293,6 +471,37 @@ function renderRules() {
   }).reverse());
 }
 
+// Lore: what the page remembers about its world. Newest first; the oldest fades when the list is full.
+function renderLore() {
+  const lore = S.lore ?? [], max = S.loreMax ?? 12;
+  $("lore-count").textContent = lore.length ? `${lore.length}/${max}` : "";
+  $("help-lore-max").textContent = String(max);
+  $("lore-empty").hidden = lore.length > 0;
+  $("lore").replaceChildren(...lore.map((l, i) => {
+    const yours = mine.has(l.suggestion_id);
+    return h("li", { class: yours ? "mine" : "", title: `From the suggestion “${l.source}”${l.version_id ? `, in v${l.version_id}` : ""}` },
+      h("span", { class: "pos" }, "✦"),
+      h("span", { class: "txt" }, l.text),
+      h("span", { class: "meta" },
+        yours ? h("span", { class: "tag yours" }, "yours") : null,
+        lore.length >= max && i === 0 ? h("span", { class: "tag next", title: "The next new memory replaces this one" }, "fades next") : null,
+        h("span", { class: "tag", title: `Remembered since ${new Date(l.created_at).toLocaleString()}` }, ago(l.created_at)),
+        yours || admin ? h("button", { class: "link", type: "button", onclick: () => removeLore(l.id) }, "Forget") : null));
+  }).reverse());
+}
+async function removeLore(id) {
+  const r = await api("/api/lore/remove", { id });
+  if (!r.ok) sticky($("suggest-msg"), "bad", r.data.error ?? "Couldn't remove that.");
+}
+
+// The era a version belongs to: { n, name, version_id, started_at } (eras are oldest first).
+function eraOf(id) {
+  let e = null;
+  for (const x of S?.eras ?? []) if (x.version_id <= id) e = x;
+  return e;
+}
+const eraName = (e) => e.name ? `Era ${e.n}: ${e.name}` : `Era ${e.n}`;
+
 async function removeRule(id) {
   const r = await api("/api/rules/remove", { id });
   if (!r.ok) sticky($("suggest-msg"), "bad", r.data.error ?? "Couldn't remove that rule.");
@@ -313,9 +522,10 @@ function renderNow() {
   const writing = p?.stage !== "testing";
   $("now-steps").replaceChildren(
     ...(p?.rule ? [h("li", { class: "rule" }, `New rule: ${p.rule}`)] : []),
+    ...(p?.lore ? [h("li", { class: "lore" }, `Remembering: ${p.lore}`)] : []),
     ...steps.map((s, i) => h("li", { class: writing && i === steps.length - 1 ? "current" : "" }, s)));
   $("now-code").hidden = !showCode;
-  if (showCode) $("now-code").textContent = p?.tail || "Waiting for the first lines…";   // text, never HTML
+  if (showCode) $("now-code").textContent = p?.tail || (p?.stage === "waking" ? "Waking the model up…" : "Waiting for the first lines…");   // text, never HTML
   $("code-toggle").textContent = showCode ? "Hide code" : "Show code";
   tickElapsed();
 }
@@ -325,7 +535,7 @@ function tickElapsed() {
   if (!r || !r.started_at) return;
   const s = Math.max(0, Math.round((Date.now() - r.started_at) / 1000));
   const p = progress && progress.id === r.id ? progress : null;
-  const stage = { writing: "writing", testing: "testing in a browser", fixing: "fixing a bug it found", shrinking: "too long, trimming",
+  const stage = { waking: "the model was asleep, waking it up (~10 s)", writing: "writing", testing: "testing in a browser", fixing: "fixing a bug it found", shrinking: "too long, trimming",
     retrying: "an edit missed, retrying" }[p?.stage] ?? "writing";
   $("now-elapsed").textContent = `${s}s · ${stage}${p && p.stage !== "testing" ? ` · ${Math.round(p.chars / 100) / 10} KB` : ""}`;
 }
@@ -359,6 +569,7 @@ function render() {
   renderStage();
   renderQueue();
   renderRules();
+  renderLore();
   renderNow();
   renderMine();
   $("admin-badge").hidden = !admin;
@@ -395,7 +606,8 @@ function placeSidePop(p) {
   p.box.style.right = `${innerWidth - side.getBoundingClientRect().left + 10}px`;
   p.box.style.top = `${Math.max(8, Math.min(b.top - 14, innerHeight - p.box.offsetHeight - 8))}px`;
 }
-$("history-scroll").closest(".side").addEventListener("scroll", () => setHelp(false), { passive: true });
+// Capture: also closes on scrolling a list inside the sidebar (the Rules list holds the lore "i").
+$("history-scroll").closest(".side").addEventListener("scroll", () => setHelp(false), { passive: true, capture: true });
 addEventListener("resize", () => setHelp(false));
 for (const p of pops) p.btn.onclick = (e) => { e.stopPropagation(); setHelp(p.box.hidden, p); };
 document.addEventListener("click", (e) => { if (!e.target.closest(".help")) setHelp(false); });
@@ -506,9 +718,13 @@ function setupTurnstile() {
   s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
   s.async = true;
   s.onload = () => {
-    $("turnstile").hidden = false;
+    const box = $("turnstile");
+    box.classList.add("idle");
+    box.hidden = false;
     tsWidget = window.turnstile.render("#turnstile", {
       sitekey: key, appearance: "interaction-only", size: "flexible",
+      "before-interactive-callback": () => box.classList.remove("idle"),
+      "after-interactive-callback": () => box.classList.add("idle"),
       callback: (t) => { tsToken = t; }, "expired-callback": () => { tsToken = ""; }, "error-callback": () => { tsToken = ""; },
     });
   };
@@ -614,6 +830,7 @@ function applyState(next) {
     if (viewing === latestId()) viewing = null;
   }
   render();
+  sendSite();
   if ((S.ideas ?? []).join("\n") !== ideasSig) { ideasSig = (S.ideas ?? []).join("\n"); nextIdea(); }
 }
 
@@ -654,8 +871,11 @@ function connect() {
   es = new EventSource("/api/events");
   const alive = () => { lastEvent = Date.now(); streamWorks = true; };
   es.addEventListener("ping", alive);
+  es.addEventListener("hello", (e) => { alive(); me = JSON.parse(e.data); cursorKey = null; cursorsData = null; syncCursorKey(); });
+  es.addEventListener("cursors", (e) => { alive(); cursorsData = JSON.parse(e.data); sendCursors(); });
+  es.addEventListener("chrome-cursors", (e) => { alive(); chromeData = JSON.parse(e.data); renderChromeCursors(); });
   es.addEventListener("state", (e) => { alive(); applyState(JSON.parse(e.data)); });
-  es.addEventListener("viewers", (e) => { alive(); if (S) { S.viewers = JSON.parse(e.data).viewers; renderViewers(); } });
+  es.addEventListener("viewers", (e) => { alive(); if (S) { S.viewers = JSON.parse(e.data).viewers; renderViewers(); sendSite(); } });
   es.addEventListener("draft", (e) => { alive(); draftData = JSON.parse(e.data); });
   es.addEventListener("progress", (e) => {
     alive();
@@ -663,7 +883,7 @@ function connect() {
     progress = JSON.parse(e.data);
     if (!S) return;
     renderNow();
-    if (progress.draft !== before) renderStage();
+    if (progress.draft !== before) { renderStage(); sendSite(); }
   });
   const self = es;
   setTimeout(() => { if (!streamWorks && es === self) { self.close(); startPolling(); } }, 4000);
@@ -684,6 +904,12 @@ setInterval(() => {
 document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - lastEvent > 45_000) { poll(); connect(); } });
 
 adminFromHash();
+// The server puts the current state in the page (#boot), so the first paint already has the lists filled in and
+// nothing jumps when the stream's first state arrives.
+try {
+  const boot = JSON.parse($("boot")?.textContent || "null");
+  if (boot) { progress = boot.progress ?? null; delete boot.progress; applyState(boot); }
+} catch {}
 connect();
 setInterval(tickElapsed, 1000);
-setInterval(() => { if (S) { renderHistory(true); renderStage(); renderQueue(); renderRules(); renderMine(); } }, 15_000);
+setInterval(() => { if (S) { renderHistory(true); renderStage(); renderQueue(); renderRules(); renderLore(); renderMine(); } }, 15_000);

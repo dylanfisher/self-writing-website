@@ -68,6 +68,64 @@ const BODY = `<h1 class="a">Hello</h1>\n<div id="box" style="position:absolute">
   ok(reply.failed && reloaded, "script change falls back to loading");
   ok(page.url().endsWith("/d/2") && await page.evaluate(() => document.querySelector("#box").style.left) === "60px", "and shows the new page");
 }
+{ // cursors: reported relative to the element under the pointer, drawn at that element, kept through a patch
+  const body = `<h1>Title</h1>\n<div id="a" style="margin:40px 0 0 100px;width:200px;height:100px;background:#eee">a</div>\n<p>after</p>`;
+  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  // Only here: open the overlay's shadow root so the test can see where cursors are drawn.
+  await page.addInitScript(() => { const a = Element.prototype.attachShadow; Element.prototype.attachShadow = function () { return a.call(this, { mode: "open" }); }; });
+  pages.set("/d/1", base("body{margin:0}", body, ""));
+  await page.goto(`${origin}/d/1`);
+  const got = page.evaluate(() => new Promise((resolve) => {
+    addEventListener("message", (e) => { if (e.data?.srp === "pointer" && !e.data.gone) resolve(e.data); });
+    setTimeout(() => resolve(null), 2000);
+  }));
+  const box = await page.locator("#a").boundingBox();
+  await page.mouse.move(box.x + 50, box.y + 25);
+  const ptr = await got;
+  ok(ptr && ptr.p === "1" && ptr.fx === 0.25 && ptr.fy === 0.25, `pointer reported on its element (${JSON.stringify(ptr)})`);
+  const draw = (list) => page.evaluate((list) => postMessage({ srp: "cursors", list }, location.origin), list);
+  const drawn = () => page.waitForTimeout(700).then(() => page.evaluate(() => {
+    const host = document.querySelector("srp-cursors");
+    if (!host?.isConnected) return null;
+    return [...host.shadowRoot.querySelectorAll(".c")].map((c) => ({ gone: c.classList.contains("gone"),
+      ...(([x, y]) => ({ x: Math.round(x), y: Math.round(y) }))(/translate\(([-\d.]+)px,\s*([-\d.]+)px/.exec(c.style.transform).slice(1).map(Number)) }));
+  }));
+  // Someone else's cursor on the same spot of #a; another on an element this page doesn't have (fallback x/y).
+  await draw([{ id: "abc123", hue: 200, ...ptr }, { id: "def456", hue: 10, p: "9.9", fx: 0, fy: 0, x: 0.5, y: 300 }]);
+  let c = await drawn();
+  ok(c?.length === 2 && c[0].x === Math.round(box.x + 50) && c[0].y === Math.round(box.y + 25), `cursor drawn on its element (${JSON.stringify(c?.[0])})`);
+  ok(c?.[1].x === 400 && c[1].y === 300, `unknown element falls back to page position (${JSON.stringify(c?.[1])})`);
+  // The element moves (another screen size, a script): the cursor follows it.
+  await page.evaluate(() => { document.querySelector("#a").style.marginLeft = "300px"; });
+  c = await drawn();
+  ok(c?.[0].x === Math.round(box.x + 250), `cursor follows its element (${c?.[0].x})`);
+  // Gone from the list: fades and is removed.
+  await draw([{ id: "abc123", hue: 200, ...ptr }]);
+  c = await drawn();
+  ok(c?.length === 1, "cursor that left is removed");
+  // Patched to the next draft: the overlay stays (it's ours, data-srp).
+  await page.evaluate(([from, html]) => postMessage({ srp: "morph", from, html, url: "/d/2" }, location.origin),
+    [base("body{margin:0}", body, ""), base("body{margin:0}", body + "\n<p>more</p>", "")]);
+  c = await drawn();
+  ok(c?.length === 1 && await page.evaluate(() => document.body.textContent.includes("more")), "overlay kept through a patch");
+  // A page that wipes everything: drawn again on the next update.
+  await page.evaluate(() => { document.documentElement.innerHTML = "<head></head><body><p>wiped</p></body>"; });
+  await draw([{ id: "abc123", hue: 200, ...ptr }]);
+  c = await drawn();
+  ok(c?.length === 1, "overlay comes back after the page wipes it");
+  // Bad input from a page's own scripts is ignored, not thrown.
+  await draw([{ id: "x", p: "<img>", fx: "nope", y: -5 }, null, { id: "" }]);
+  c = await drawn();
+  ok(c?.length === 1, "junk cursor data handled");
+  // Leaving the page reports "gone".
+  const gone = page.evaluate(() => new Promise((resolve) => {
+    addEventListener("message", (e) => { if (e.data?.gone) resolve(true); });
+    setTimeout(() => resolve(false), 2000);
+  }));
+  await page.mouse.move(-10, -10);
+  await page.dispatchEvent("html", "pointerout", { relatedTarget: null, pointerType: "mouse" }).catch(() => {});
+  ok(await gone, "leaving reports gone");
+}
 await browser.close();
 srv.close();
 process.exit(failed ? 1 : 0);

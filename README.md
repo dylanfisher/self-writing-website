@@ -69,6 +69,34 @@ lists them, and whoever suggested a rule (same IP) or the admin can remove it. R
 it: nothing on the page is undone. Ended rules stay in the `rules` table. Every rule costs an edit on every later
 suggestion (a rule that rewrites a long line costs seconds each time), so fewer, short rules keep things fast.
 
+**Lore.** When a suggestion names something or gives the page's world a story ("add a fox called Pip"), the model
+starts its reply with `LORE: <the fact>`, saved if that version is published. Every later prompt lists the active
+lore after the page, so the page keeps its own canon even after the element itself is gone. It costs no edit, only
+~20 prompt tokens each. At most `LORE_MAX` (12); a new one fades out the oldest. Shown under "The page remembers" in
+the Rules panel; whoever suggested it (same IP) or the admin can remove it (Forget). The system prompt alone rarely
+got lore written, so a one-line reminder follows the suggestion in every prompt (`LORE_NOTE`).
+
+**Eras.** Every `ERA_DAYS` (7) the server queues a suggestion of its own (`kind = 'era'`, shown as "A new week, a new
+era…"; the model gets `ERA_SUGGESTION`): a light tidy-up that keeps the page's character, and a name for the new era
+(`ERA: <name>`). Era 1 is the site's start. History marks where each era begins, and every prompt says which era it
+is. Checked hourly; a failed era waits for the next interval. To start one now (admin):
+`curl -s -X POST http://127.0.0.1:3000/api/admin/era -H "Authorization: Bearer $(tr -d '\n' < data/admin-token)" -H "Content-Type: application/json" -d '{}'`
+
+**`window.SITE`.** Page scripts can read live, public facts about the site: `SITE.viewers`, `version`, `latest`,
+`old` (an older version is being viewed), `draft`, `writing` (`{text, at}` or null), `queue` and `recent`
+(`[{text, at}]`), `rules`, `lore`, `era` (`{n, name, at}`), and `SITE.on("change", fn)`. The shim defines it with
+safe defaults; the shell page sends updates with `postMessage` when the frame loads and when something changes
+(version pages are cached forever, so nothing live is baked into them). Read-only: nothing goes back. The page
+check sends two made-up updates during its run, so code reacting to them is tested before publishing.
+
+**Other visitors' cursors.** The shim reports where the pointer is (relative to the element under it: its child-index
+path from `<body>` and the spot in its box, so it lands on the same content at any screen width) and draws other
+visitors' cursors in a closed shadow root that live-draft patching leaves alone. The shell page posts ours to
+`/api/cursor` with what it's viewing (`v<version>` or `d<suggestion>` for a live draft), using the token the event
+stream's `hello` gave it; the server sends each page the cursors on the same one, batched every 120 ms, at most 30.
+Mouse and pen only; none while polling (quick tunnels). Sandbox URLs carry the shim's hash (`&s=`) because version
+pages are cached forever with the shim inlined.
+
 Using the site: type a suggestion and press Enter. Step through versions with ← → (Home/End jump to the ends),
 drag the slider, or click a row in History. A link like `/#v12` opens that version. **Full page** (or F) hides
 everything but the built page and a small warning pill; Esc or **Show controls** brings it back. History lists the
@@ -84,8 +112,8 @@ newest 250 versions and loads older ones in pages; the slider always covers all 
 | `lib/check.mjs` | runs a page in headless Chromium (sandbox CSP, no network) and reports JS errors, freezes and element leaks (a page that keeps adding elements, confirmed by fast-forwarding its timers 30 s) |
 | `scripts/profile-page.mjs` | `node scripts/profile-page.mjs <url> [seconds]`: fps per frame, long tasks, DOM size and the hottest JS functions, for finding what slows a page down |
 | `scripts/check-versions.mjs` | re-checks stored versions and marks broken ones (⚠ in History) |
-| `lib/shim.js` | added to every sandbox page: storage stand-in, and in-place patching of live drafts |
-| `scripts/test-shim.mjs` / `scripts/test-shim-history.mjs` | tests the patching; replays real version pairs through it |
+| `lib/shim.js` | added to every sandbox page: storage stand-in, `window.SITE`, in-place patching of live drafts, cursors |
+| `scripts/test-shim.mjs` / `scripts/test-shim-history.mjs` | tests the patching and cursors; replays real version pairs through it |
 | `scripts/bench-model.mjs` | times the model on the latest page (first text, tokens/s), for comparing model-server settings |
 | `rewrite.mjs` | the same rewrite from the command line, writing to `versions/` (for tuning the prompt) |
 | `scripts/import-cli-versions.mjs` | copies `versions/` into a fresh `data/site.db` so the site has history |
@@ -109,6 +137,8 @@ are kept.
 | `QUEUED_PER_VISITOR` | `3` | How many of one visitor's suggestions can be in line (or running) at once. |
 | `QUEUE_MAX` | `100` | New suggestions are refused while the line is this long. |
 | `RULES_MAX` | `5` | Standing rules active at once, site-wide. |
+| `LORE_MAX` | `12` | Lore active at once; a new one fades out the oldest. |
+| `ERA_DAYS` | `7` | Days between new eras. |
 | `EDIT_BLOCK_SECONDS` | `120` | Longest the model may spend on one edit block. |
 | `SUGGESTION_SECONDS` | `600` | Safety cap on a whole suggestion, all attempts included. |
 | `ADMIN_TOKEN` | from `data/admin-token` | |

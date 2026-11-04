@@ -2,3 +2,13 @@
 data/
 node_modules/
 .DS_Store
+
+# Common defaults
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+npm-debug.log*
+.vscode/
+.idea/

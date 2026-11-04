@@ -29,6 +29,9 @@ if [[ "$1" == tunnel ]]; then
       node server.mjs & SERVER=$!
       wait $SERVER; local code=$?
       (( code == 0 )) && return 0
+      # 75 is a reload (SIGUSR2): start again at once, since visitors get a 502 until something listens.
+      # A crash waits 5 s, so a server that dies at startup doesn't spin.
+      if (( code == 75 )); then echo "$(date '+%F %T') server reloading"; continue; fi
       echo "$(date '+%F %T') server exited with code $code; restarting in 5 s"
       sleep 5
     done

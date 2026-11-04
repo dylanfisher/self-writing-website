@@ -35,7 +35,6 @@ button { font: inherit; color: inherit; }
   flex: none; background: var(--bg); }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 600;
   letter-spacing: -.01em; white-space: nowrap; margin-right: auto; }
-.brand img { display: block; }
 .warn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--amber-text); background: var(--amber-bg);
   border: 1px solid var(--amber-line); border-radius: 999px; padding: 4px 12px; min-width: 0; }
 .warn { position: relative; cursor: help; white-space: nowrap; font-weight: 500; flex: none; }
@@ -64,6 +63,8 @@ button { font: inherit; color: inherit; }
 .info-btn { width: 20px; height: 20px; font: italic 600 12px Georgia, "Times New Roman", serif; }
 .side .help-box { width: 320px; font-weight: 400; }
 .side .help-box.beside { position: fixed; z-index: 40; }
+/* A box inside a scrolling list would be clipped by it; narrow screens show it as a sheet at the bottom instead. */
+.scroll .help-box:not(.beside) { position: fixed; top: auto; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); width: auto; z-index: 40; }
 .help-box strong { color: var(--text); font-weight: 500; }
 .admin-badge { font-size: 12px; display: flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 999px;
   padding: 3px 10px; white-space: nowrap; }
@@ -103,6 +104,16 @@ iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff;
 .history-panel { flex: 1 1 0; min-height: 180px; padding-bottom: 0; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; overscroll-behavior: contain; margin: 0 -8px; padding: 0 8px; }
 .history-panel .scroll { padding-bottom: 12px; }
+/* Short desktop viewports: squeezing every list into the viewport leaves each one a row or two tall, so instead each
+   list keeps a useful height and the sidebar scrolls. Lists let the wheel carry on to the sidebar at their ends. */
+@media (min-width: 861px) and (max-height: 940px) {
+  .queue-panel, .rules-panel { flex: none; max-height: none; min-height: 0; }
+  .queue-panel .scroll { max-height: 42vh; }
+  .rules-panel .scroll { max-height: 52vh; }
+  .history-panel { min-height: 72vh; }
+  .scroll { overscroll-behavior: auto; }
+  .now-panel .code { height: 110px; }
+}
 .count { font: 12px var(--mono); color: var(--faint); font-weight: 400; }
 
 /* ---------- controls ---------- */
@@ -163,6 +174,12 @@ iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff;
 .rules .meta { display: flex; gap: 8px; align-items: baseline; margin-left: auto; }
 .rules .tag.next { color: var(--amber-text); }
 .rules-empty { font-size: 13px; }
+.lore-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 10px 0 2px; }
+.lore-h { font-size: 12px; font-weight: 600; color: var(--faint); margin: 0; text-transform: uppercase; letter-spacing: .04em; }
+.lore .pos { font-family: inherit; }
+.era-tag { display: inline-block; margin-right: 6px; color: var(--blue); font-size: 11px; font-weight: 600; }
+.steps li.lore { color: var(--text); font-weight: 500; }
+.steps li.lore::before { content: "✦"; color: var(--blue); }
 .steps li.rule { color: var(--text); font-weight: 500; }
 .steps li.rule::before { content: "↻"; color: var(--blue); }
 .recent { margin-top: 8px; font-size: 12px; color: var(--muted); }
@@ -193,7 +210,15 @@ iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff;
 .vtip-meta { font: 12px var(--mono); color: var(--faint); }
 .vtip-warn { color: var(--bad); font-size: 12px; }
 
+/* Invisible until Cloudflare wants a click: kept out of the flow (no gap) so it can't push the form down on load. */
 .turnstile:empty { display: none; }
+.turnstile.idle { position: absolute; width: 1px; height: 0; overflow: hidden; }
+
+/* ---------- other visitors' cursors over the controls (app.js) ---------- */
+.remote-cursors { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647; overflow: hidden; contain: strict; }
+.remote-cursors .rc { position: absolute; left: 0; top: 0; width: 16px; height: 20px; will-change: transform;
+  transition: opacity .4s; filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)); }
+.remote-cursors .rc.gone { opacity: 0; }
 
 /* ---------- full-page mode: just the built page ---------- */
 .focus-pill { position: fixed; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10; display: flex;

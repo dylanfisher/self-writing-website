@@ -11,9 +11,10 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { makeIdeas } from "./lib/ideas.mjs";
-import { rewrite, statusLines, ruleChanges, parseEdits, applyEdits, sensitiveInput, SEED, FEEDBACK_CAP, MODEL, RULE_CAP, SUGGESTION_MS, SIZE_CAP } from "./lib/model.mjs";
+import { rewrite, modelLoaded, statusLines, ruleChanges, parseEdits, applyEdits, sensitiveInput, SEED, FEEDBACK_CAP, MODEL, RULE_CAP, LORE_CAP, ERA_CAP, ERA_TEXT, ERA_SUGGESTION, SUGGESTION_MS, SIZE_CAP } from "./lib/model.mjs";
 import { scriptsLast } from "./lib/scripts-last.mjs";
 import { closeChecker } from "./lib/check.mjs";
+import { makeStats } from "./lib/stats.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA = join(ROOT, "data");
@@ -48,6 +49,11 @@ const MEMORY_MINE = 8, MEMORY_MINE_MINUTES = 120, MEMORY_OTHERS = 5;
 // Standing rules: a suggestion the model reads as "do this on every change" becomes a rule, applied to every later
 // change. At most this many are active, site-wide; a new one pushes out the oldest.
 const RULES_MAX = Number(env.RULES_MAX ?? 5);
+// Lore: facts about the page's world the model chose to remember ("LORE: …"), listed in every later prompt. Cheap
+// (no edit per change, ~20 tokens each). At most this many; a new one pushes out the oldest.
+const LORE_MAX = Number(env.LORE_MAX ?? 12);
+// Eras: every ERA_DAYS the server queues a suggestion of its own that tidies the page up and names the new era.
+const ERA_MS = Number(env.ERA_DAYS ?? 7) * 86_400_000;
 
 const secretFile = (name) => {
   const p = join(DATA, name);
@@ -121,6 +127,38 @@ db.exec(`
 if (!db.prepare("SELECT 1 FROM pragma_table_info('rules') WHERE name = 'updated_at'").get()) {
   db.exec("ALTER TABLE rules ADD COLUMN updated_at INTEGER; ALTER TABLE rules ADD COLUMN updated_by TEXT");
 }
+// Lore (see LORE_MAX). Like rules: whoever suggested it (same IP) or the admin can remove it.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lore (
+    id INTEGER PRIMARY KEY,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL,            -- the suggestion it came from
+    suggestion_id INTEGER,
+    version_id INTEGER,
+    ip_hash TEXT NOT NULL,
+    status TEXT NOT NULL,            -- active | faded (pushed out by newer lore) | removed
+    created_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    ended_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS lore_status ON lore(status, id);
+  -- One row per era; an era starts at version_id. Era 1 is the site's beginning.
+  CREATE TABLE IF NOT EXISTS eras (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    suggestion_id INTEGER,
+    version_id INTEGER NOT NULL,
+    started_at INTEGER NOT NULL
+  );
+`);
+// kind: NULL for a visitor's suggestion, 'era' for one the server queued to start a new era.
+if (!db.prepare("SELECT 1 FROM pragma_table_info('suggestions') WHERE name = 'kind'").get()) {
+  db.exec("ALTER TABLE suggestions ADD COLUMN kind TEXT");
+}
+if (!db.prepare("SELECT 1 FROM eras LIMIT 1").get()) {
+  const first = db.prepare("SELECT id, created_at FROM versions ORDER BY id LIMIT 1").get();
+  db.prepare("INSERT INTO eras (name, version_id, started_at) VALUES (NULL, ?, ?)").run(first.id, first.created_at);
+}
 // A random id for this database, put in version URLs (/v/12?db=…). Version pages are cached forever, and a reset
 // starts the numbering over, so without it browsers would keep showing the old database's /v/12.
 db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
@@ -128,6 +166,11 @@ db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('db_id', ?)").run(ra
 const DB_ID = db.prepare("SELECT value FROM meta WHERE key = 'db_id'").get().value;
 // A crash or restart mid-generation leaves a 'running' row. Fail it rather than re-run it: it would go first in
 // line again, and a suggestion that keeps the model busy (or brings the server down) would block the line forever.
+// Model work per suggestion (done or not): output tokens and seconds spent writing.
+if (!db.prepare("SELECT 1 FROM pragma_table_info('suggestions') WHERE name = 'tokens'").get()) {
+  db.exec("ALTER TABLE suggestions ADD COLUMN tokens INTEGER; ALTER TABLE suggestions ADD COLUMN secs REAL");
+}
+const stats = makeStats(db);
 db.prepare("UPDATE suggestions SET status = 'failed', error = 'interrupted by a server restart', finished_at = ? WHERE status = 'running'")
   .run(Date.now());
 
@@ -148,7 +191,18 @@ const q = {
   // A visitor's most recent suggestions inside the window, newest first.
   recentFromIp: db.prepare("SELECT created_at FROM suggestions WHERE ip_hash = ? AND status != 'removed' AND created_at > ? ORDER BY created_at DESC LIMIT ?"),
   queuedFromIp: db.prepare("SELECT COUNT(*) AS n FROM suggestions WHERE ip_hash = ? AND status IN ('queued','running')"),
-  next: db.prepare("SELECT id, text, ip_hash FROM suggestions WHERE status = 'queued' ORDER BY id LIMIT 1"),
+  next: db.prepare("SELECT id, text, ip_hash, kind FROM suggestions WHERE status = 'queued' ORDER BY id LIMIT 1"),
+  activeLore: db.prepare("SELECT id, text, source, suggestion_id, version_id, created_at FROM lore WHERE status = 'active' ORDER BY id"),
+  insertLore: db.prepare("INSERT INTO lore (text, source, suggestion_id, version_id, ip_hash, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?)"),
+  endLore: db.prepare("UPDATE lore SET status = ?, ended_at = ?, ended_by = ? WHERE id = ? AND status = 'active'"),
+  loreOwner: db.prepare("SELECT ip_hash FROM lore WHERE id = ? AND status = 'active'"),
+  eras: db.prepare("SELECT id, name, version_id, started_at FROM eras ORDER BY id"),
+  insertEra: db.prepare("INSERT INTO eras (name, suggestion_id, version_id, started_at) VALUES (?, ?, ?, ?)"),
+  // The last time a new era was started or tried (a failed attempt waits for the next interval too).
+  lastEraTry: db.prepare(`SELECT MAX(t) AS t FROM (SELECT MAX(started_at) AS t FROM eras
+    UNION ALL SELECT MAX(created_at) FROM suggestions WHERE kind = 'era')`),
+  eraWaiting: db.prepare("SELECT 1 FROM suggestions WHERE kind = 'era' AND status IN ('queued','running') LIMIT 1"),
+  insertEraSuggestion: db.prepare("INSERT INTO suggestions (text, ip_hash, status, created_at, kind) VALUES (?, 'era', 'queued', ?, 'era')"),
   // Newest first; callers reverse to oldest first.
   // With what was actually done: the model's status lines for the version each one became.
   memoryMine: db.prepare(`
@@ -159,6 +213,7 @@ const q = {
     WHERE s.ip_hash != ? AND s.id < ? AND s.status = 'done' ORDER BY s.id DESC LIMIT ?`),
   start: db.prepare("UPDATE suggestions SET status = 'running', started_at = ? WHERE id = ?"),
   finish: db.prepare("UPDATE suggestions SET status = ?, error = ?, version_id = ?, finished_at = ? WHERE id = ?"),
+  usage: db.prepare("UPDATE suggestions SET tokens = ?, secs = ? WHERE id = ?"),
   insertVersion: db.prepare("INSERT INTO versions (html, suggestion_id, note, bytes, secs, created_at, errors, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
   remove: db.prepare("UPDATE suggestions SET status = 'removed', finished_at = ? WHERE id = ? AND status = 'queued'"),
   queuedOwner: db.prepare("SELECT ip_hash FROM suggestions WHERE id = ? AND status = 'queued'"),
@@ -184,11 +239,18 @@ function viewers() {
 let lastViewers = -1;
 function broadcastViewers() {
   const n = viewers();
+  stats.viewers(n);
   if (n !== lastViewers) { lastViewers = n; broadcast("viewers", { viewers: n }); }
 }
 
+// Eras numbered from 1, oldest first.
+const eras = () => q.eras.all().map((e, i) => ({ n: i + 1, name: e.name, version_id: e.version_id, started_at: e.started_at }));
 const historyBefore = (before, limit = HISTORY_PAGE) => q.history.all(before, limit).reverse();
-function state() {
+// A page's first state has the latest HISTORY_PAGE versions. Later broadcasts carry only the latest
+// BROADCAST_HISTORY (the page merges them into what it has; versions never change once written), so a broadcast is
+// ~4 KB instead of ~60 KB. A page that misses more than that reconnects and gets the full state again.
+const BROADCAST_HISTORY = 20;
+function state(historyLimit = HISTORY_PAGE) {
   const b = q.bounds.get();
   return {
     sandboxOrigin: SANDBOX_ORIGIN,
@@ -196,7 +258,7 @@ function state() {
     current: b.last,
     first: b.first,
     total: b.total,
-    history: historyBefore(b.last + 1),   // the latest HISTORY_PAGE versions, oldest first
+    history: historyBefore(b.last + 1, historyLimit),   // the latest versions, oldest first
     turnstileSiteKey: TURNSTILE ? TURNSTILE_SITE_KEY : null,
     running: q.running.get() ?? null,
     queue: q.queued.all(),
@@ -206,8 +268,12 @@ function state() {
     feedbackCap: FEEDBACK_CAP,
     rules: q.activeRules.all(),
     rulesMax: RULES_MAX,
+    lore: q.activeLore.all(),
+    loreMax: LORE_MAX,
+    eras: eras(),
     ideas,
     build: build(),
+    shim: SHIM_HASH,   // in sandbox URLs: version pages are cached for good, with the shim inlined
     model: MODEL,
     viewers: viewers(),
     drafted,
@@ -215,7 +281,7 @@ function state() {
 }
 function send(res, event, data) { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
 function broadcast(event, data) { for (const c of clients) send(c, event, data); }
-const broadcastState = () => broadcast("state", state());
+const broadcastState = () => broadcast("state", state(BROADCAST_HISTORY));
 // The site's own code (page, script, styles, and the shim in every sandbox page). Open pages reload when it changes
 // (see "build" in app.js). Files are read per request, so an edit to public/ is noticed here without a restart;
 // a restart sends it with the first state.
@@ -228,6 +294,72 @@ setInterval(() => { const b = build(); if (lastBuild && b !== lastBuild) broadca
 // A real event (not a comment), so pages can tell a live connection from one that silently died.
 setInterval(() => broadcast("ping", {}), 20_000).unref();
 setInterval(broadcastViewers, 5_000).unref();   // pollers time out without a request to notice it
+
+// ---------- cursors: where other visitors' pointers are on the page ----------
+// Each event stream gets a public id (shown to others) and a secret token (to post its own cursor). A page posts
+// what it's looking at (k: "v<version>" or "d<suggestion id>" for a live draft) and, while the pointer is over the
+// page, where (see lib/shim.js). Every CURSOR_MS each page gets the cursors on the same k, its own included (the
+// page leaves it out). Only pages with a working stream take part; polling pages (quick tunnels) see none.
+const CURSOR_MS = 120;          // broadcast interval, and the fastest a page may post
+const CURSOR_IDLE_MS = 15_000;  // a cursor that hasn't moved for this long is hidden
+const CURSORS_SHOWN = 30;       // per page, the most recently moved
+const streams = new Map();      // token → { id, res, k, cur, at, posted }
+const dirtyKeys = new Set();
+const CURSOR_KEY = /^[vd]\d{1,9}$/, CURSOR_PATH = /^\d{1,4}(\.\d{1,4}){0,39}$/;
+// Cursors over the shell's own controls (header, page bar, scrub bar, sidebar) are the same on every version, so
+// they go to every page: { z: zone, fx, fy }, a position in that zone's box (data-cz in public/index.html).
+const CURSOR_ZONES = new Set(["top", "bar", "scrub", "side"]);
+let chromeDirty = false, chromeShown = 0;
+const unit = (n) => Number.isFinite(n) ? Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000 : 0;
+function postCursor(body) {
+  const s = streams.get(String(body?.token ?? ""));
+  if (!s) return false;
+  const now = Date.now();
+  if (now - s.posted < CURSOR_MS / 2) return true;   // too fast: dropped, not an error
+  s.posted = now;
+  const k = CURSOR_KEY.test(body.k) ? body.k : null;
+  const c = body.c;
+  const cur = !c || typeof c !== "object" ? null
+    : CURSOR_ZONES.has(c.z) ? { z: c.z, fx: unit(c.fx), fy: unit(c.fy) }
+    : k && (c.p === "" || CURSOR_PATH.test(c.p))
+      ? { p: c.p, fx: unit(c.fx), fy: unit(c.fy), x: unit(c.x), y: Math.round(Math.min(1e6, Math.max(0, Number(c.y) || 0))) }
+      : null;
+  if (s.cur?.z || cur?.z) chromeDirty = true;
+  // Both pages change: the one left loses this cursor, the one joined gains it (and the joiner needs the list).
+  if (s.k) dirtyKeys.add(s.k);
+  if (k) dirtyKeys.add(k);
+  s.k = k; s.cur = cur;
+  if (cur) s.at = now;
+  return true;
+}
+let cursorsShown = new Map();   // k → number of cursors sent last time, so expiring ones are cleared
+setInterval(() => {
+  const now = Date.now();
+  const byKey = new Map();
+  for (const s of streams.values()) {
+    if (!s.k) continue;
+    if (!byKey.has(s.k)) byKey.set(s.k, { list: [], pages: [] });
+    const g = byKey.get(s.k);
+    g.pages.push(s.res);
+    if (s.cur && !s.cur.z && now - s.at < CURSOR_IDLE_MS) g.list.push(s);
+  }
+  for (const [k, g] of byKey) {
+    // Expired cursors change what's shown without a post.
+    if (!dirtyKeys.has(k) && g.list.length === (cursorsShown.get(k) ?? 0)) continue;
+    const list = g.list.sort((a, b) => b.at - a.at).slice(0, CURSORS_SHOWN).map((s) => ({ id: s.id, ...s.cur }));
+    for (const res of g.pages) send(res, "cursors", { k, list });
+    cursorsShown.set(k, g.list.length);
+  }
+  for (const k of cursorsShown.keys()) if (!byKey.has(k)) cursorsShown.delete(k);
+  dirtyKeys.clear();
+  const chrome = [...streams.values()].filter((s) => s.cur?.z && now - s.at < CURSOR_IDLE_MS);
+  if (chromeDirty || chrome.length !== chromeShown) {
+    const list = chrome.sort((a, b) => b.at - a.at).slice(0, CURSORS_SHOWN).map((s) => ({ id: s.id, ...s.cur }));
+    for (const s of streams.values()) send(s.res, "chrome-cursors", { list });
+    chromeShown = chrome.length;
+  }
+  chromeDirty = false;
+}, CURSOR_MS).unref();
 
 // ---------- untrusted text ----------
 // Suggestions come from strangers and error messages from model-written pages. Control characters (ESC, C1 CSI…)
@@ -289,27 +421,34 @@ async function work() {
       const cur = q.latest.get();
       q.start.run(Date.now(), job.id);
       // Edits are short; ~1.5 KB is typical (the bar caps at 97% if a reply runs longer).
-      progress = { id: job.id, stage: "writing", chars: 0, expected: 1500, tail: "", steps: [], rule: null, draft: null, draftBlocks: 0 };
+      progress = { id: job.id, stage: "writing", chars: 0, expected: job.kind === "era" ? 4000 : 1500, tail: "", steps: [], rule: null, lore: null, draft: null, draftBlocks: 0 };
       draftOf = { base: null, blocks: 0 };
       draftVersion = cur;
       const rules = q.activeRules.all();   // as numbered in this prompt; END RULE: n refers to rules[n - 1]
       const context = {
         version: cur.id,
         rules,
+        lore: q.activeLore.all(),
+        era: eras().at(-1),
         mine: q.memoryMine.all(job.ip_hash, job.id, Date.now() - MEMORY_MINE_MINUTES * 60_000, MEMORY_MINE).reverse(),
         others: q.memoryOthers.all(job.ip_hash, job.id, MEMORY_OTHERS).reverse(),
       };
+      // The model server unloads the model when idle; the first suggestion after that waits while it loads.
+      if (await modelLoaded() === false) { progress.stage = "waking"; console.log(`#${job.id} waking the model`); }
       broadcastState();
+      broadcast("progress", progress);
       let lastSent = 0;
       const onText = (text, base) => {
+        if (progress.stage === "waking") progress.stage = "writing";
         progress.chars = text.length;
         const newDraft = updateDraft(text, base);
         // A new status line is worth sending right away; plain progress is throttled.
         const steps = statusLines(text);
-        const rule = ruleChanges(text).add;
-        const newStep = newDraft || steps.length !== progress.steps.length || rule !== progress.rule;
+        const meta = ruleChanges(text), rule = meta.add, lore = meta.lore;
+        const newStep = newDraft || steps.length !== progress.steps.length || rule !== progress.rule || lore !== progress.lore;
         progress.steps = steps;
         progress.rule = rule;   // shown with textContent only
+        progress.lore = lore;
         const now = Date.now();
         if (newStep) { lastSent = now; progress.tail = text.slice(-2000); return broadcast("progress", progress); }
         if (now - lastSent < 400) return;
@@ -332,13 +471,15 @@ async function work() {
           ac.abort();
           resolve({ error: `took longer than ${Math.round(SUGGESTION_MS / 1000) + 20} s`, failed: true });
         }, SUGGESTION_MS + 20_000); });
-        r = await Promise.race([rewrite(cur.html, job.text, { onText, onStage, context, signal: ac.signal }), watchdog])
+        r = await Promise.race([rewrite(cur.html, job.kind === "era" ? ERA_SUGGESTION : job.text, { onText, onStage, context, signal: ac.signal }), watchdog])
           .finally(() => clearTimeout(timer));
       } catch (err) {
         r = { error: `generation failed: ${err.message}`, failed: true };
       }
       const now = Date.now();
-      // Every failed attempt's raw reply, for working out why the model went wrong. Never served.
+      q.usage.run(r.tokens ?? null, r.secs ?? null, job.id);
+      // The raw reply of every attempt when there was more than one (failed ones, then the accepted one), for working
+      // out why the model went wrong. Never served.
       if (r.tries?.length) {
         mkdirSync(join(DATA, "attempts"), { recursive: true });
         writeFileSync(join(DATA, "attempts", `${job.id}.txt`), `suggestion: ${job.text}\n` + r.tries.map((t) =>
@@ -357,6 +498,14 @@ async function work() {
         drafted = progress?.draft && drafts.get(progress.draft) === r.html ? { version: Number(lastInsertRowid), draft: progress.draft } : null;
         const ruleNote = applyRuleChanges(r.rules, rules, job, Number(lastInsertRowid), now);
         if (ruleNote) console.log(`#${job.id} rules: ${forLog(ruleNote)}`);
+        // An era's own LORE line only restates the era, which every prompt already gives.
+        const loreNote = job.kind === "era" ? "" : addLore(r.rules?.lore, job, Number(lastInsertRowid), now);
+        if (loreNote) console.log(`#${job.id} lore: ${forLog(loreNote)}`);
+        if (job.kind === "era") {
+          const name = r.rules?.era ? cleanInput(r.rules.era).slice(0, ERA_CAP) : null;
+          q.insertEra.run(name, job.id, Number(lastInsertRowid), now);
+          console.log(`#${job.id} new era ${eras().length}: ${forLog(name ?? "(no name)")}`);
+        }
         if (r.skippedRules?.length) console.log(`#${job.id} skipped rule edits: ${forLog(r.skippedRules.join("; "))}`);
         console.log(`#${job.id} → v${lastInsertRowid} ${r.bytes} B ${r.secs.toFixed(0)}s ${r.edits ? `${r.edits} edits` : "full rewrite"}` +
           `${context.mine.length ? ` (+${context.mine.length} earlier)` : ""}${firstNote(r.first)} · ${r.tokens} tokens "${forLog(job.text)}"`);
@@ -427,6 +576,42 @@ function applyRuleChanges(changes, shown, job, versionId, now) {
   }
   return notes.join("; ");
 }
+
+// A finished version's lore line, if any: saved (unless it's already known), and the oldest fades past LORE_MAX.
+function addLore(raw, job, versionId, now) {
+  const text = raw ? cleanInput(raw).slice(0, LORE_CAP) : "";
+  if (!text) return "";
+  const active = q.activeLore.all();
+  if (active.some((l) => l.text.toLowerCase() === text.toLowerCase())) return "";
+  const notes = [`new "${text}"`];
+  db.exec("BEGIN");
+  try {
+    q.insertLore.run(text, job.text, job.id, versionId, job.ip_hash, now);
+    for (const old of active.slice(0, Math.max(0, active.length + 1 - LORE_MAX))) {
+      q.endLore.run("faded", now, `limit, by #${job.id}`, old.id);
+      notes.push(`faded "${old.text}"`);
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    console.log(`#${job.id} lore not saved: ${err.message}`);
+    return "";
+  }
+  return notes.join("; ");
+}
+
+// Queues the suggestion that starts a new era, at the end of the line. Weekly by itself (checked hourly), or by
+// the admin. Not while one is waiting; a failed one waits for the next interval rather than retrying every hour.
+function queueEra(force = false) {
+  if (q.eraWaiting.get()) return false;
+  if (!force && Date.now() - (q.lastEraTry.get()?.t ?? 0) < ERA_MS) return false;
+  q.insertEraSuggestion.run(ERA_TEXT, Date.now());
+  console.log(`queued a new era${force ? " (admin)" : ""}`);
+  broadcastState();
+  work();
+  return true;
+}
+setInterval(queueEra, 3_600_000).unref();
 
 // ---------- request helpers ----------
 function clientIp(req) {
@@ -517,9 +702,14 @@ function staticFile(name) {
   }
   return f;
 }
+// The current state goes in the page as JSON (a data block, not a script, so the CSP is unchanged): app.js renders
+// it before the first paint, so the lists don't fill in and shift the layout a moment later. "<" is escaped so
+// visitor or model text can't close the tag.
 function indexHtml() {
+  const boot = JSON.stringify({ ...state(), progress }).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
   return staticFile("index.html").body.toString("utf8")
-    .replace(/(href|src)="\/(app\.css|app\.js|favicon\.svg)"/g, (_, attr, name) => `${attr}="/${name}?v=${staticFile(name).hash}"`);
+    .replace(/(href|src)="\/(app\.css|app\.js|favicon\.svg)"/g, (_, attr, name) => `${attr}="/${name}?v=${staticFile(name).hash}"`)
+    .replace("</head>", () => `<script id="boot" type="application/json">${boot}</script>\n</head>`);
 }
 
 // ---------- main origin ----------
@@ -532,6 +722,7 @@ const main = http.createServer(async (req, res) => {
       // The page itself is never cached; an asset is cached for good only when asked for by its current hash.
       const f = staticFile(file);
       const pinned = path !== "/" && url.searchParams.get("v") === f.hash;
+      if (path === "/" && req.method === "GET") stats.visitor(ipHash(clientIp(req)));
       res.writeHead(200, {
         "Content-Type": type,
         "Content-Security-Policy": MAIN_CSP,
@@ -568,16 +759,31 @@ const main = http.createServer(async (req, res) => {
         "X-Accel-Buffering": "no",
       });
       clients.add(res);
+      const token = randomBytes(16).toString("hex");
+      const cursor = { id: randomBytes(6).toString("hex"), res, k: null, cur: null, at: 0, posted: 0 };
+      streams.set(token, cursor);
+      send(res, "hello", { id: cursor.id, token });
+      chromeDirty = true;   // the new page needs the cursors over the controls
       send(res, "state", state());
       if (progress) send(res, "progress", progress);
       broadcastViewers();
       req.on("close", () => {
         clients.delete(res);
+        streams.delete(token);
+        if (cursor.k) dirtyKeys.add(cursor.k);
+        if (cursor.cur?.z) chromeDirty = true;
         const n = (streamsByIp.get(who) ?? 1) - 1;
         if (n > 0) streamsByIp.set(who, n); else streamsByIp.delete(who);
         broadcastViewers();
       });
       return;
+    }
+
+    // A page's cursor (see "cursors" above). Cheap and frequent: no rate limit beyond the per-stream one.
+    if (req.method === "POST" && path === "/api/cursor") {
+      const ok = postCursor(await readJson(req, 600));
+      res.writeHead(ok ? 204 : 410, { "Cache-Control": "no-store" });
+      return res.end();
     }
 
     if (req.method === "POST" && path === "/api/suggest") {
@@ -632,6 +838,19 @@ const main = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // Removing lore: whoever suggested it, or the admin.
+    if (req.method === "POST" && path === "/api/lore/remove") {
+      const body = await readJson(req);
+      const id = Number(body.id);
+      const lore = Number.isInteger(id) && q.loreOwner.get(id);
+      if (!lore) return json(res, 404, { error: "The page doesn't remember that any more." });
+      const admin = isAdmin(req);
+      if (!admin && lore.ip_hash !== ipHash(clientIp(req))) return json(res, 403, { error: "Only whoever suggested it can remove it." });
+      q.endLore.run("removed", Date.now(), admin ? "admin" : "author", id);
+      broadcastState();
+      return json(res, 200, { ok: true });
+    }
+
     if (req.method === "POST" && path.startsWith("/api/admin/")) {
       if (!isAdmin(req)) return json(res, 403, { error: "forbidden" });
       const body = await readJson(req);
@@ -644,6 +863,9 @@ const main = http.createServer(async (req, res) => {
         const { lastInsertRowid } = q.insertVersion.run(v.html, null, `restored v${id}`, Buffer.byteLength(v.html), null, Date.now(), v.errors, null);
         broadcastState();
         return json(res, 200, { id: Number(lastInsertRowid) });
+      }
+      if (path === "/api/admin/era") {
+        return json(res, 200, { ok: queueEra(true) });
       }
       if (path === "/api/admin/remove") {
         q.remove.run(Date.now(), Number(body.id));
@@ -668,6 +890,7 @@ const SANDBOX_CSP = [
 // Added when serving (not stored): a storage stand-in and live-draft patching. See lib/shim.js.
 const SHIM = `<script data-srp>${readFileSync(join(ROOT, "lib", "shim.js"), "utf8")
   .replace("__MAIN_ORIGIN__", () => JSON.stringify(MAIN_ORIGIN))}</script>`;
+const SHIM_HASH = createHash("sha256").update(SHIM).digest("hex").slice(0, 8);
 function withShim(html) {
   const m = /<head\b[^>]*>/i.exec(html) ?? /<html\b[^>]*>/i.exec(html);
   return m ? html.slice(0, m.index + m[0].length) + SHIM + html.slice(m.index + m[0].length) : SHIM + html;
@@ -707,22 +930,30 @@ const sandbox = http.createServer((req, res) => {
   res.end(withShim(v.html));
 });
 
+// Fixed route names for the traffic counts (never the raw path, which anyone can make up).
+const MAIN_ROUTES = new Set(["/", "/api/state", "/api/events", "/api/history", "/api/suggest", "/api/cursor"]);
+stats.track(main, "main", (p) => MAIN_ROUTES.has(p) ? p : STATIC[p] ? "assets" : p.startsWith("/api/") ? "/api/other" : "other");
+stats.track(sandbox, "sandbox", (p) => /^\/v\/\d+$/.test(p) ? "/v" : /^\/d\/\d+$/.test(p) ? "/d" : "other");
+
 main.listen(PORT, HOST, () => {
   sandbox.listen(SANDBOX_PORT, HOST, () => {
     console.log(`main     ${MAIN_ORIGIN}  (listening ${HOST}:${PORT})`);
     console.log(`sandbox  ${SANDBOX_ORIGIN}  (listening ${HOST}:${SANDBOX_PORT})`);
-    console.log(`admin    ${MAIN_ORIGIN}/#admin=${ADMIN_TOKEN}`);
+    // Masked: the log is kept for good. The full link: scripts/admin-url.sh
+    console.log(`admin    ${MAIN_ORIGIN}/#admin=${ADMIN_TOKEN.slice(0, 4)}…  (full link: scripts/admin-url.sh)`);
     work();
     refreshIdeas();
+    queueEra();
   });
 });
 
 // A generation in progress when the process stops is marked failed on the next start, never re-run (see the UPDATE
 // near the top); a SIGUSR2 reload waits for it instead.
-// SIGINT/SIGTERM stop (exit 0). SIGUSR2 exits with 75, which start-remote.sh's loop treats like a crash and
-// restarts: a code reload that keeps the tunnels and their URLs.
+// SIGINT/SIGTERM stop (exit 0). SIGUSR2 exits with 75, which start-remote.sh's loop restarts at once (a crash
+// waits 5 s): a code reload that keeps the tunnels and their URLs.
 const stop = (code) => {
   setTimeout(() => process.exit(code), 3000).unref();
+  stats.flush();
   closeChecker().finally(() => process.exit(code));
 };
 for (const [sig, code] of [["SIGINT", 0], ["SIGTERM", 0]]) {
