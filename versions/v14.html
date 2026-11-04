@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Cyberspace Pool v2.0</title>
+<style>
+  @import url('data:text/css,'); /* Reserved for future fonts */
+
+  body {
+    font-family: 'Courier New', monospace;
+    background-color: #000022;
+    color: #00ff00;
+    margin: 0;
+    overflow-x: hidden;
+    min-height: 100vh;
+    font-size: 14px;
+    /* Cleaner grid background */
+    background-image: linear-gradient(rgba(0, 255, 0, 0.1) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(0, 255, 0, 0.1) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  /* Modernized Container (Flexbox) */
+  .main-container {
+    display: flex;
+    max-width: 1000px;
+    margin: 40px auto;
+    background: #000000;
+    border: 2px solid #00ff00;
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+    min-height: 600px;
+  }
+
+  /* Sidebar - Compact */
+  .sidebar {
+    width: 200px;
+    background: #000011;
+    border-right: 1px solid #004400;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .logo {
+    font-family: 'Verdana', sans-serif;
+    font-weight: 900;
+    font-size: 24px;
+    color: #ffff00;
+    text-align: center;
+    text-shadow: 0 0 5px #ffff00;
+    margin-bottom: 20px;
+  }
+
+  .nav-link {
+    display: block;
+    color: #00ccff;
+    text-decoration: none;
+    padding: 5px;
+    border: 1px solid transparent;
+  }
+
+  .nav-link:hover {
+    background: #002244;
+    border: 1px solid #00ccff;
+    color: #fff;
+    cursor: help;
+  }
+
+  .visitor-counter {
+    margin-top: auto;
+    font-size: 10px;
+    color: #888;
+    text-align: center;
+    border-top: 1px solid #333;
+    padding-top: 10px;
+  }
+
+  /* Main Content */
+  .content {
+    flex: 1;
+    padding: 30px;
+  }
+
+  h1 {
+    font-family: 'Verdana', sans-serif;
+    color: #00ccff;
+    text-transform: uppercase;
+    border-bottom: 2px solid #00ccff;
+    padding-bottom: 10px;
+    font-size: 24px;
+    text-align: center;
+  }
+
+  p {
+    line-height: 1.6;
+    color: #cccccc;
+  }
+
+  /* The Arena */
+  .arena-wrapper {
+    margin: 20px 0;
+    background: #050505;
+    border: 2px inset #555;
+    position: relative;
+    height: 300px;
+    overflow: hidden;
+  }
+
+  .target {
+    width: 40px;
+    height: 40px;
+    background: radial-gradient(circle, red 40%, white 42%, blue 100%);
+    border-radius: 50%;
+    position: absolute;
+    cursor: crosshair;
+    box-shadow: 0 0 10px red;
+    animation: pulse 1s infinite;
+  }
+
+  @keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.1); opacity: 0.8; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  /* Controls */
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    background: #111;
+    padding: 5px 10px;
+    border: 1px solid #444;
+    font-weight: bold;
+    color: #00ff00;
+  }
+
+  /* Guestbook - Cleaned up */
+  .guestbook-section {
+    margin-top: 40px;
+    border-top: 1px dashed #444;
+    padding-top: 20px;
+  }
+
+  .guestbook-entry {
+    background: #111122;
+    padding: 10px;
+    margin-bottom: 10px;
+    border-left: 3px solid #00ff00;
+    font-size: 12px;
+  }
+
+  .guestbook-user {
+    color: #ffff00;
+    font-weight: bold;
+  }
+
+  /* Clean Retro Form */
+  .retro-form {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 15px;
+  }
+
+  input {
+    background: #000;
+    border: 1px solid #444;
+    color: #00ff00;
+    padding: 5px;
+    font-family: 'Courier New', monospace;
+    flex: 1;
+  }
+
+  button {
+    background: #004400;
+    color: #fff;
+    border: 1px solid #00ff00;
+    padding: 5px 15px;
+    cursor: pointer;
+    font-weight: bold;
+    text-transform: uppercase;
+  }
+
+  button:hover {
+    background: #00ff00;
+    color: #000;
+  }
+
+  /* Hidden Elements (Toggled) */
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+  <div class="main-container">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="logo">CYBER<span style="color:#00ccff">FROG</span></div>
+      
+      <nav>
+        <a href="#" class="nav-link" onclick="event.preventDefault()">>> Home</a>
+        <a href="#" class="nav-link" onclick="event.preventDefault()">>> Stats</a>
+        <a href="#" class="nav-link" onclick="event.preventDefault()">>> Projects</a>
+        <a href="#guestbook" class="nav-link">>> Guestbook</a>
+      </nav>
+
+      <div class="visitor-counter">
+        Visitors: <span id="visitor-count">004821</span><br>
+        <span style="font-size: 8px;">Online</span>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <h1>The Hunting Grounds</h1>
+      <p>Welcome to the streamlined interface. Eliminate targets. Sign the book. No banners, no marquee, just data.</p>
+
+      <div class="status-bar">
+        <span>STATUS: <span style="color: cyan;">ACTIVE</span></span>
+        <span>SCORE: <span id="score" style="color: red;">0000</span></span>
+      </div>
+
+      <!-- Game Area -->
+      <div class="arena-wrapper" id="game-area">
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #333; pointer-events: none;">
+          [ WAITING FOR INPUT ]
+        </div>
+      </div>
+
+      <!-- Guestbook -->
+      <div class="guestbook-section" id="guestbook">
+        <div class="retro-form">
+          <input type="text" id="gb-name" placeholder="Handle">
+          <input type="text" id="gb-msg" placeholder="Transmit message...">
+          <button onclick="postGuestbook()">SEND</button>
+        </div>
+
+        <div id="guestbook-entries">
+          <div class="guestbook-entry">
+            <div class="guestbook-user">CoolFrog99 // 10/24/98</div>
+            <div>Site is clean. Good job.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Logic
+    let score = 0;
+    
+    function scrollToGuestbook() {
+        document.getElementById('guestbook').scrollIntoView({behavior: 'smooth'});
+    }
+
+    function spawnTarget() {
+        const area = document.getElementById('game-area');
+        if (area.children.length > 10) return;
+
+        const target = document.createElement('div');
+        target.className = 'target';
+        
+        const maxX = area.clientWidth - 40;
+        const maxY = area.clientHeight - 40;
+        target.style.left = Math.floor(Math.random() * maxX) + 'px';
+        target.style.top = Math.floor(Math.random() * maxY) + 'px';
+
+        // Simple bounce logic
+        let dx = (Math.random() > 0.5 ? 2 : -2);
+        let dy = (Math.random() > 0.5 ? 2 : -2);
+
+        function moveTarget() {
+            let l = parseFloat(target.style.left);
+            let t = parseFloat(target.style.top);
+            
+            if (l <= 0 || l >= maxX) dx *= -1;
+            if (t <= 0 || t >= maxY) dy *= -1;
+
+            target.style.left = l + dx + 'px';
+            target.style.top = t + dy + 'px';
+            
+            if(area.contains(target)) requestAnimationFrame(moveTarget);
+        }
+
+        moveTarget();
+        
+        target.addEventListener('click', (e) => {
+            e.stopPropagation();
+            score += 100;
+            document.getElementById('score').innerText = String(score).padStart(4, '0');
+            
+            // Visual feedback
+            const popup = document.createElement('div');
+            popup.innerText = "+100";
+            popup.style.position = 'absolute';
+            popup.style.left = (e.clientX - area.getBoundingClientRect().left) + 'px';
+            popup.style.top = (e.clientY - area.getBoundingClientRect().top) + 'px';
+            popup.style.color = '#00ff00';
+            popup.style.fontWeight = 'bold';
+            area.appendChild(popup);
+            setTimeout(() => popup.remove(), 500);
+
+            target.remove();
+        });
+        
+        area.appendChild(target);
+        setTimeout(() => {
+            if (area.contains(target)) target.remove();
+        }, 4000);
+    }
+
+    setInterval(spawnTarget, 1200);
+
+    setInterval(() => {
+        const counter = document.getElementById('visitor-count');
+        let val = parseInt(counter.innerText);
+        counter.innerText = String(val + 1).padStart(6, '0');
+    }, 5000);
+
+    // Guestbook Logic
+    function postGuestbook() {
+        const name = document.getElementById('gb-name').value || "Anonymous";
+        const msg = document.getElementById('gb-msg').value || "Transmission empty.";
+        const container = document.getElementById('guestbook-entries');
+
+        const entry = document.createElement('div');
+        entry.className = 'guestbook-entry';
+        
+        const date = new Date();
+        const dateStr = date.toLocaleDateString();
+
+        entry.innerHTML = `
+            <div class="guestbook-user">${name} // ${dateStr}</div>
+            <div>${msg}</div>
+        `;
+        
+        container.prepend(entry);
+        document.getElementById('gb-name').value = '';
+        document.getElementById('gb-msg').value = '';
+    }
+  </script>
+</body>
+</html>

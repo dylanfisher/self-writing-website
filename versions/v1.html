@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Frog’s Pool</title>
+<style>
+  body {
+    font-family: 'Georgia', serif;
+    background-color: #e0f7fa;
+    color: #006064;
+    margin: 0;
+    padding: 2rem;
+    text-align: center;
+    transition: background-color 0.5s;
+    min-height: 100vh;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  h1 {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+    color: #00838f;
+    text-shadow: 2px 2px 0px rgba(0, 255, 0, 0.1);
+  }
+  
+  p {
+    font-size: 1.2rem;
+    max-width: 600px;
+    line-height: 1.6;
+  }
+  
+  .lily-pad {
+    display: inline-block;
+    background: #4caf50;
+    border-radius: 50%;
+    padding: 2rem;
+    margin: 2rem;
+    position: relative;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease;
+    cursor: pointer;
+  }
+  
+  .lily-pad:hover {
+    transform: scale(1.05) rotate(5deg);
+  }
+  
+  .frog-svg {
+    width: 100px;
+    height: 100px;
+    margin-bottom: -10px;
+  }
+  
+  .ripple {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 0;
+    height: 0;
+    border: 2px solid #80deea;
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+  }
+  
+  @keyframes ripple-effect {
+    0% { width: 0; height: 0; opacity: 1; }
+    100% { width: 300px; height: 300px; opacity: 0; }
+  }
+  
+  .croak {
+    animation: ripple-effect 1s ease-out;
+    animation-iteration-count: 1;
+  }
+  
+  .quote {
+    font-style: italic;
+    color: #00838f;
+    margin-top: 2rem;
+    padding: 1rem;
+    border-left: 4px solid #4caf50;
+    background: rgba(255,255,255,0.5);
+    border-radius: 0 8px 8px 0;
+    max-width: 500px;
+  }
+  
+  .cursor {
+    display: inline-block;
+    width: 10px;
+    height: 1em;
+    background-color: #006064;
+    animation: blink 1s infinite;
+    vertical-align: middle;
+    margin-left: 5px;
+  }
+  
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+</style>
+</head>
+<body>
+  <h1>The Frog’s Pool</h1>
+  
+  <div class="lily-pad" onclick="sing()" title="Click for a croak">
+    <svg class="frog-svg" viewBox="0 0 100 100">
+      <ellipse cx="50" cy="70" rx="40" ry="25" fill="#4caf50"/>
+      <circle cx="30" cy="45" r="15" fill="#4caf50"/>
+      <circle cx="70" cy="45" r="15" fill="#4caf50"/>
+      <circle cx="30" cy="45" r="8" fill="white"/>
+      <circle cx="70" cy="45" r="8" fill="white"/>
+      <circle cx="30" cy="45" r="4" fill="black"/>
+      <circle cx="70" cy="45" r="4" fill="black"/>
+      <path d="M 40 75 Q 50 85 60 75" stroke="#006064" stroke-width="2" fill="none"/>
+      <ellipse cx="20" cy="75" rx="15" ry="8" fill="#4caf50"/>
+      <ellipse cx="80" cy="75" rx="15" ry="8" fill="#4caf50"/>
+    </svg>
+    <div class="ripple" id="ripple"></div>
+  </div>
+  
+  <p>Every visitor leaves one suggestion, and the page is rewritten to follow it. <br>
+  <span style="font-size:0.9em; opacity:0.8">Now, imagine a pond where ideas hop from lily pad to lily pad.</span></p>
+  
+  <div class="quote" id="quote">
+    "In every walk with nature, one receives far more than he seeks."<span class="cursor">_</span>
+  </div>
+
+  <script>
+    const quotes = [
+      "Nature does not hurry, yet everything is accomplished.",
+      "The only way to make sense out of change is to plunge into it, move with it, and join the dance.",
+      "Look deep into nature, and then you will understand everything better.",
+      "Adaptability is about the power to survive and thrive.",
+      "Keep your face always toward the sunshine—and shadows will fall behind you.",
+      "The frog who wants to be a singer does not cry before the storm.",
+      "Water cannot be divided without becoming less."
+    ];
+    
+    const colors = [
+      "#e0f7fa", "#f1f8e9", "#fff3e0", "#fce4ec", 
+      "#e8eaf6", "#f3e5f5", "#e0f2f1", "#fffde7"
+    ];
+    
+    function sing() {
+      const ripple = document.getElementById('ripple');
+      ripple.classList.remove('croak');
+      void ripple.offsetWidth; // trigger reflow
+      ripple.classList.add('croak');
+      
+      // Pick a new random quote and background
+      const newQuote = quotes[Math.floor(Math.random() * quotes.length)];
+      const newColor = colors[Math.floor(Math.random() * colors.length)];
+      
+      document.getElementById('quote').innerHTML = 
+        `"${newQuote}"<span class="cursor">_</span>`;
+        
+      document.body.style.backgroundColor = newColor;
+    }
+    
+    // Auto-change background every 5 seconds if user doesn't click
+    setInterval(() => {
+      const newColor = colors[Math.floor(Math.random() * colors.length)];
+      document.body.style.backgroundColor = newColor;
+    }, 5000);
+  </script>
+</body>
+</html>

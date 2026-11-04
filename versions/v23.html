@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Keeper's Ledger v9.0</title>
+<style>
+  body {
+    font-family: 'Georgia', serif;
+    background-color: #05070a;
+    color: #a8b2c1;
+    margin: 0;
+    overflow-x: hidden;
+    height: 100vh;
+    font-size: 14px;
+    transition: background 1s;
+    background-image: radial-gradient(circle at 50% 50%, #1a202c 0%, #05070a 100%);
+  }
+
+  /* --- LIGHTHOUSE BEAM --- */
+  .lighthouse-container {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    width: 0;
+    height: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .beam {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 600px;
+    height: 40px;
+    background: linear-gradient(to right, rgba(255,255,200,0.8), rgba(255,255,200,0) 90%);
+    transform-origin: bottom left;
+    clip-path: polygon(0% 20%, 100% 0%, 100% 100%, 0% 80%);
+    filter: blur(4px);
+    opacity: 0.4;
+    animation: sweep 12s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes sweep {
+    0% { transform: rotate(60deg); opacity: 0.2; }
+    50% { transform: rotate(120deg); opacity: 0.5; }
+    100% { transform: rotate(60deg); opacity: 0.2; }
+  }
+
+  /* Canvas for the Surprise */
+  #surprise-canvas {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 100;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 2s;
+  }
+  #surprise-canvas.active {
+    pointer-events: auto;
+    opacity: 1;
+  }
+
+  /* --- SECRET DOOR STYLES --- */
+  .hidden-panel {
+    position: fixed;
+    right: 0;
+    top: 0;
+    height: 100vh;
+    width: 0;
+    background: #000;
+    border-left: 1px solid #d4af37;
+    z-index: 999;
+    overflow: hidden;
+    transition: width 0.1s linear;
+    box-shadow: -10px 0 50px rgba(0,0,0,0.8);
+  }
+
+  .hidden-panel.open {
+    width: 100vw;
+    transition: width 1.5s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .hidden-content {
+    opacity: 0;
+    transform: translateX(50px);
+    transition: opacity 0.5s 1s, transform 0.5s 1s;
+    padding: 100px;
+    text-align: center;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: radial-gradient(circle, #111 0%, #000 100%);
+  }
+
+  .hidden-panel.open .hidden-content {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  .door-handle {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 10px;
+    height: 60px;
+    background: #d4af37;
+    border: 2px solid #554433;
+    cursor: pointer;
+    z-index: 1000;
+    animation: pulse-door 2s infinite;
+  }
+
+  @keyframes pulse-door {
+    0% { box-shadow: 0 0 5px #d4af37; }
+    50% { box-shadow: 0 0 15px #d4af37; }
+    100% { box-shadow: 0 0 5px #d4af37; }
+  }
+
+  .main-container {
+    display: flex;
+    max-width: 1000px;
+    margin: 20px auto;
+    background: rgba(17, 22, 29, 0.95);
+    border: 1px solid #2c3e50;
+    box-shadow: 0 0 50px rgba(190, 80, 30, 0.1);
+    min-height: 80vh;
+    position: relative;
+    backdrop-filter: blur(5px);
+    z-index: 10;
+  }
+
+  .sidebar {
+    width: 220px;
+    background: #0d1219;
+    border-right: 1px solid #2c3e50;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    z-index: 2;
+  }
+
+  .logo {
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    font-size: 18px;
+    color: #d4af37;
+    text-align: center;
+    border-bottom: 1px solid #d4af37;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    animation: pulse 4s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  .nav-link {
+    display: block;
+    color: #556677;
+    text-decoration: none;
+    padding: 5px;
+    font-family: 'Courier New', monospace;
+    text-transform: uppercase;
+    font-size: 12px;
+    cursor: default;
+  }
+
+  .nav-link:hover { color: #d4af37; padding-left: 5px; }
+
+  .weather-widget {
+    margin-top: auto;
+    font-size: 10px;
+    color: #556677;
+    text-align: center;
+    border-top: 1px solid #2c3e50;
+    padding-top: 10px;
+    font-family: 'Courier New', monospace;
+    transition: all 0.5s;
+  }
+
+  .main-content {
+    flex: 1;
+    padding: 40px;
+    position: relative;
+    overflow-y: auto;
+    z-index: 1;
+  }
+
+  .scrap {
+    color: #ff5722;
+    opacity: 0.6;
+    transform: rotate(-5deg) translateY(20px);
+    position: relative;
+    z-index: 10;
+    display: inline-block;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    cursor: help;
+  }
+
+  h1 {
+    font-family: 'Times New Roman', serif;
+    color: #eceff1;
+    border-bottom: 2px solid #34495e;
+    padding-bottom: 10px;
+    font-size: 28px;
+    margin-top: 0;
+    font-style: italic;
+    margin-bottom: 20px;
+  }
+
+  /* --- THE MYSTERY BOX --- */
+  .mystery-container {
+    margin: 40px 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100px;
+  }
+
+  .gift-box {
+    width: 80px;
+    height: 60px;
+    background: #8b0000;
+    position: relative;
+    cursor: pointer;
+    transition: transform 0.3s;
+    box-shadow: 0 0 10px rgba(0,0,0,0.5);
+  }
+
+  .gift-box:hover { transform: scale(1.1); }
+
+  .gift-box::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 100%;
+    background: #d4af37;
+  }
+
+  .gift-box::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 100%;
+    height: 20px;
+    background: #d4af37;
+  }
+
+  .lid {
+    width: 90px;
+    height: 20px;
+    background: #8b0000;
+    position: absolute;
+    top: -20px;
+    left: -5px;
+    border: 2px solid #d4af37;
+    z-index: 3;
+    transition: all 0.6s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+  }
+
+  .lid::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 100%;
+    background: #d4af37;
+  }
+
+  .gift-box.open .lid {
+    transform: translateY(-80px) rotate(-30deg);
+  }
+
+  .lid::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    background: #d4af37;
+    border-radius: 50%;
+  }
+
+  /* Flash effect */
+  .flash-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: white;
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    background: #18202b;
+    padding: 10px;
+    border: 1px solid #2c3e50;
+    font-family: 'Courier New', monospace;
+    color: #76a3b8;
+    letter-spacing: 1px;
+    margin-bottom: 40px;
+  }
+
+  /* --- SURPRISE CONTENT --- */
+  .surprise-content {
+    display: none;
+    text-align: center;
+    animation: fadeIn 1s forwards;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; } to { opacity: 1; }
+  }
+
+  .surprise-text {
+    font-size: 24px;
+    font-family: 'Courier New', monospace;
+    color: #00ffff;
+    text-shadow: 0 0 10px #00ffff;
+    margin-bottom: 20px;
+  }
+
+  .surprise-sub {
+    font-family: 'Times New Roman', serif;
+    font-style: italic;
+    color: #a8b2c1;
+  }
+
+  .rain-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.1'/%3E%3C/svg%3E");
+    pointer-events: none;
+    opacity: 0.5;
+    animation: rain 0.5s linear infinite;
+    z-index: 0;
+  }
+  
+  @keyframes rain {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 20px; }
+  }
+
+  .logbook-section {
+    border-top: 2px solid #2c3e50;
+    padding-top: 20px;
+  }
+
+  .log-entry {
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px;
+    margin-bottom: 10px;
+    border-left: 3px solid #d4af37;
+    font-size: 13px;
+  }
+
+  .log-date {
+    color: #d4af37;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .retro-form {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 15px;
+  }
+
+  input {
+    background: #080b10;
+    border: 1px solid #34495e;
+    color: #e67e22;
+    padding: 8px;
+    font-family: 'Courier New', monospace;
+    flex: 1;
+    outline: none;
+  }
+
+  button {
+    background: #2c3e50;
+    color: #d4af37;
+    border: 1px solid #d4af37;
+    padding: 8px 20px;
+    cursor: pointer;
+    font-weight: bold;
+    text-transform: uppercase;
+    font-family: 'Courier New', monospace;
+    transition: 0.2s;
+  }
+  
+  button:hover {
+    background: #34495e;
+    box-shadow: 0 0 10px rgba(212, 175, 55, 0.2);
+  }
+
+  /* --- THE OFFERING --- */
+  .offering-section {
+    margin: 40px 0;
+    padding: 20px;
+    border: 1px dashed #444;
+    text-align: center;
+    position: relative;
+  }
+  
+  .offering-section h3 {
+    font-family: 'Courier New', monospace;
+    color: #d4af37;
+    margin-top: 0;
+  }
+
+  .offering-desc {
+    font-size: 12px;
+    font-style: italic;
+    margin-bottom: 15px;
+    color: #667;
+  }
+
+  .payment-terminal {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 300px;
+    margin: 0 auto;
+  }
+
+  .card-input-group {
+    display: flex;
+    gap: 5px;
+  }
+
+  .loading-dots::after {
+    content: '.';
+    animation: dots 1.5s steps(5, end) infinite;
+  }
+
+  @keyframes dots {
+    0%, 20% { content: '.'; }
+    40% { content: '..'; }
+    60% { content: '...'; }
+    80%, 100% { content: ''; }
+  }
+
+</style>
+</head>
+<body>
+  <div class="rain-overlay" id="rain-overlay"></div>
+  <div class="flash-overlay" id="flash"></div>
+  
+  <!-- The Lighthouse Beam -->
+  <div class="lighthouse-container">
+    <div class="beam"></div>
+  </div>
+
+  <canvas id="surprise-canvas"></canvas>
+
+  <!-- The Hidden Room -->
+  <div class="hidden-panel" id="secret-door">
+    <div class="door-handle" id="door-trigger"></div>
+    <div class="hidden-content">
+      <h2 style="font-family: 'Courier New'; color: #d4af37; letter-spacing: 3px;">THE ARCHIVE</h2>
+      <div style="border: 1px dashed #555; padding: 40px; font-family: monospace; color: #666; max-width: 500px;">
+        <p>Subject: The Visitor</p>
+        <p>Status: Monitoring</p>
+        <br>
+        <p>
+          "We do not know who is reading this, but the logs are continuous.
+          If you have found the door, you are closer than most."
+        </p>
+        <br>
+        <button onclick="closeDoor()">Return to Watch</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-container">
+    <div class="sidebar">
+      <div class="logo">ST. MARY'S LIGHT</div>
+      
+      <nav>
+        <a href="#" class="nav-link">Logbook</a>
+        <a href="#" class="nav-link">Watch Schedule</a>
+        <a href="#" class="nav-link">Weather Data</a>
+        <a href="#logbook" class="nav-link">Inquiries</a>
+        <a href="#offering" class="nav-link">Maintenance</a>
+      </nav>
+
+      <div class="weather-widget">
+        <span id="weather-temp">TEMP: 4°C</span><br>
+        <span id="weather-cond">COND: CALM</span>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <h1>The Keeper's Diary <span id="current-date">Oct 14</span></h1>
+      
+      <p>
+        The wind howls against the iron shutters. The cold bites deep, but the hearth is bright. 
+        <span class="scrap">We burn wood and time alike.</span> The sea claims everything eventually. 
+        History is written by the victors, but eroded by the salt.
+      </p>
+      
+      <!-- THE OFFERING -->
+      <div class="offering-section" id="offering">
+        <h3>MAINTENANCE FUND</h3>
+        <p class="offering-desc">
+          The Keeper requires supplies for the winter. <br>
+          The terminal accepts standard currency.
+        </p>
+
+        <div class="payment-terminal">
+          <input type="text" placeholder="CARD NUMBER" maxlength="19">
+          <div class="card-input-group">
+            <input type="text" placeholder="MM/YY" maxlength="5">
+            <input type="text" placeholder="CVC" maxlength="3">
+          </div>
+          <button onclick="makePayment()" id="pay-btn">SEND SUPPLIES</button>
+        </div>
+        <p id="payment-status" style="margin-top:10px; color: #556677; font-size: 11px; height: 15px;"></p>
+      </div>
+
+      <p>
+        Scroll down cautiously. <span class="scrap">Entropy is not a theory.</span>
+        The light burns, but the ink fades. 
+        <span class="scrap">Do not look behind you.</span>
+      </p>
+
+      <div class="mystery-container">
+        <div class="gift-box" id="mystery-box">
+          <div class="lid"></div>
+        </div>
+      </div>
+
+      <div id="surprise-area" class="surprise-content">
+        <div class="surprise-text">SYSTEM OVERRIDE COMPLETE.</div>
+        <div class="surprise-sub">
+          We found what we were looking for. <br>
+          It wasn't the light. It was the signal.
+        </div>
+        <br>
+        <button onclick="location.reload()">Reset Simulation</button>
+      </div>
+
+      <div class="logbook-section" id="logbook">
+        <div class="retro-form">
+          <input type="text" id="gb-name" placeholder="Visitor ID">
+          <input type="text" id="gb-msg" placeholder="Report sighting...">
+          <button onclick="postGuestbook()">LOG ENTRY</button>
+        </div>
+
+        <div id="guestbook-entries">
+          <div class="log-entry">
+            <span class="log-date">14:02 - Chief Keeper J. Doe</span>
+            <div>Squall line passing to the east. Adjusted lens rotation.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- WEATHER ENGINE ---
+    function updateWeather() {
+      const conditions = [
+        { name: 'CLEAR', temp: '8°C' },
+        { name: 'FOGGY', temp: '6°C' },
+        { name: 'STORM', temp: '2°C' },
+        { name: 'COZY', temp: '22°C' }
+      ];
+      const nextCond = conditions[Math.floor(Math.random() * conditions.length)];
+      document.getElementById('weather-temp').innerText = `TEMP: ${nextCond.temp}`;
+      document.getElementById('weather-cond').innerText = `COND: ${nextCond.name}`;
+    }
+    setInterval(updateWeather, 3000);
+
+    // --- THE OFFERING (PAYMENT) ---
+    function makePayment() {
+        const btn = document.getElementById('pay-btn');
+        const status = document.getElementById('payment-status');
+        
+        // Visual feedback
+        btn.innerText = "PROCESSING";
+        btn.disabled = true;
+        status.innerHTML = "Connecting to the bank...";
+
+        setTimeout(() => {
+            status.innerHTML = "Verifying details...";
+        }, 1000);
+
+        setTimeout(() => {
+            status.innerHTML = "Approving transaction...";
+        }, 2000);
+
+        setTimeout(() => {
+            status.innerHTML = "<span style='color:#d4af37'>TRANSACTION DENIED.</span><br><span style='color:#666'>We only accept souls or silver.</span>";
+            btn.innerText = "RETURN TO WATCH";
+            btn.disabled = false;
+            btn.onclick = () => {
+                status.innerText = "";
+                btn.innerText = "SEND SUPPLIES";
+                btn.onclick = makePayment;
+                document.querySelector('.payment-terminal').style.display = 'none';
+                document.querySelector('.offering-desc').innerText = "Offering declined.";
+            };
+        }, 3500);
+    }
+
+    // --- GUESTBOOK ---
+    function postGuestbook() {
+        const name = document.getElementById('gb-name').value || "Unknown Sailor";
+        const msg = document.getElementById('gb-msg').value || "Transmission garbled.";
+        const container = document.getElementById('guestbook-entries');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        const timeStr = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        entry.innerHTML = `<span class="log-date">${timeStr} - ${name}</span><div>${msg}</div>`;
+        container.prepend(entry);
+        document.getElementById('gb-name').value = '';
+        document.getElementById('gb-msg').value = '';
+    }
+
+    // --- THE SURPRISE SCRIPT ---
+    const box = document.getElementById('mystery-box');
+    const flash = document.getElementById('flash');
+    const canvas = document.getElementById('surprise-canvas');
+    const ctx = canvas.getContext('2d');
+    const surpriseArea = document.getElementById('surprise-area');
+
+    let particles = [];
+    let running = false;
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    box.addEventListener('click', () => {
+      if (running) return;
+      running = true;
+
+      // Open box
+      box.classList.add('open');
+
+      // Wait for lid to open, then flash
+      setTimeout(() => {
+        flash.style.transition = 'opacity 0.1s';
+        flash.style.opacity = '1';
+        setTimeout(() => {
+          flash.style.transition = 'opacity 2s';
+          flash.style.opacity = '0';
+          
+          // Activate Canvas
+          canvas.classList.add('active');
+          surpriseArea.style.display = 'block';
+          initMatrix();
+        }, 500);
+      }, 600);
+    });
+
+    function initMatrix() {
+      particles = [];
+      const columns = Math.floor(canvas.width / 20);
+      for(let i = 0; i < columns; i++) {
+        particles.push({
+          x: i * 20,
+          y: Math.random() * -canvas.height,
+          speed: Math.random() * 5 + 2,
+          char: String.fromCharCode(0x30A0 + Math.random() * 96)
+        });
+      }
+      animate();
+    }
+
+    function animate() {
+      if (!running) return;
+      
+      ctx.fillStyle = 'rgba(5, 7, 10, 0.1)'; // Trails
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      ctx.fillStyle = '#0F0';
+      ctx.font = '16px monospace';
+
+      particles.forEach(p => {
+        ctx.fillText(p.char, p.x, p.y);
+        p.y += p.speed;
+        
+        if (p.y > canvas.height) {
+          p.y = Math.random() * -100;
+          p.char = String.fromCharCode(0x30A0 + Math.random() * 96);
+        }
+      });
+
+      requestAnimationFrame(animate);
+    }
+
+    // --- SECRET DOOR LOGIC ---
+    const door = document.getElementById('secret-door');
+    const doorTrigger = document.getElementById('door-trigger');
+    const body = document.body;
+
+    doorTrigger.addEventListener('mouseenter', () => {
+      door.classList.add('open');
+      body.style.cursor = 'none'; // Hide cursor inside
+    });
+
+    // Custom cursor to follow
+    const cursor = document.createElement('div');
+    cursor.style.position = 'fixed';
+    cursor.style.width = '20px';
+    cursor.style.height = '20px';
+    cursor.style.border = '2px solid #d4af37';
+    cursor.style.borderRadius = '50%';
+    cursor.style.pointerEvents = 'none';
+    cursor.style.zIndex = '10000';
+    cursor.style.transform = 'translate(-50%, -50%)';
+    cursor.style.display = 'none';
+    document.body.appendChild(cursor);
+
+    document.addEventListener('mousemove', (e) => {
+      cursor.style.left = e.clientX + 'px';
+      cursor.style.top = e.clientY + 'px';
+    });
+
+    function closeDoor() {
+      door.classList.remove('open');
+      body.style.cursor = 'auto';
+      cursor.style.display = 'none';
+    }
+
+    doorTrigger.addEventListener('mouseleave', () => {
+      if(door.classList.contains('open')) {
+        // Optionally snap back, but let's let it open once clicked
+        // door.classList.remove('open'); 
+      }
+    });
+    
+    // Close if outside the door area is clicked
+    document.addEventListener('click', (e) => {
+      if(door.classList.contains('open') && !door.contains(e.target)) {
+        closeDoor();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>This Page Rewrites Itself</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">
+    <img src="/favicon.svg" alt="" width="18" height="18">
+    <span>This page rewrites itself</span>
+  </a>
+  <div class="warn" role="note" tabindex="0" aria-describedby="warn-tip">
+    <span class="dot" aria-hidden="true"></span>AI-written
+    <span id="warn-tip" class="tip" role="tooltip">The page below is written by an AI from anonymous suggestions.
+      It can say or show anything. Never enter personal information into it.</span>
+  </div>
+  <span id="admin-badge" class="admin-badge" hidden>Admin <button id="admin-logout" class="link" type="button">Sign out</button></span>
+  <span id="viewers" class="viewers" hidden><span class="live-dot" aria-hidden="true"></span><span id="viewers-n"></span><span class="viewers-lbl"> here now</span></span>
+  <div class="help">
+    <button id="help-btn" class="help-btn" type="button" aria-label="What is this?" aria-expanded="false" aria-controls="help-box">?</button>
+    <div id="help-box" class="help-box" role="dialog" aria-label="About this site" hidden>
+      <h2>What is this?</h2>
+      <p>A web page that anyone can change. Leave a suggestion and an AI edits the page to follow it, one suggestion
+        at a time, in the order they came in. Every version is kept, so you can scrub back through all of them.</p>
+      <p>The AI is <strong id="help-model">Qwen</strong>, an open model running locally on a MacBook Pro in my closet.
+        No cloud AI involved. You can watch it write each change live under “Now writing”.</p>
+      <p>The model has no tool calls and no internet access. All it sees is the current page and the suggestions,
+        and all it can do is write edits to the page, which then runs sealed off in your browser with no network.</p>
+      <p>It makes small edits rather than rewriting the whole page, and it remembers your last few suggestions, so
+        you can follow up with “no, bigger” or “on all four sides”.</p>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="stage" aria-label="Page">
+    <div class="stage-bar">
+      <span id="viewing" class="viewing"></span>
+      <span id="viewing-suggestion" class="viewing-suggestion"></span>
+      <button id="to-latest" class="btn small" type="button" hidden>Back to latest</button>
+      <button id="focus-btn" class="btn small icon-btn" type="button" title="Hide controls (F)" aria-label="Hide controls">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        <span class="lbl">Full page</span>
+      </button>
+    </div>
+    <div class="frame-wrap">
+      <!-- Scripts only, opaque origin: no forms, popups, top navigation or same-origin access. -->
+      <iframe id="frame" title="Current version of the page" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    </div>
+    <div class="scrub">
+      <button id="play" class="btn small icon-btn" type="button" aria-label="Play through every version" title="Play (P)">
+        <svg class="i-play" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4.5 2.5v11l9-5.5z" fill="currentColor"/></svg>
+        <svg class="i-pause" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"/></svg>
+      </button>
+      <button id="speed" class="btn small speed" type="button" aria-label="Playback speed" title="Playback speed">1×</button>
+      <button id="prev" class="btn small icon-btn" type="button" aria-label="Previous version">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+      <input id="scrubber" type="range" min="1" max="1" value="1" aria-label="Version">
+      <button id="next" class="btn small icon-btn" type="button" aria-label="Next version">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="m6 3 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+      <span id="scrub-pos" class="scrub-pos"></span>
+    </div>
+  </section>
+
+  <aside class="side">
+    <section class="panel suggest-panel">
+      <h2>Suggest a change</h2>
+      <form id="suggest-form" class="suggest">
+        <textarea id="suggest-text" rows="2" maxlength="200" placeholder="make it rain frogs"></textarea>
+        <div id="turnstile" class="turnstile" hidden></div>
+        <div class="suggest-row">
+          <span id="count" class="muted mono">0 / 200</span>
+          <button id="suggest-btn" class="btn primary" type="submit">Add to the line</button>
+        </div>
+        <p id="suggest-msg" class="msg" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="panel now-panel">
+      <div class="panel-head">
+        <h2>Now writing</h2>
+        <button id="code-toggle" class="link" type="button" hidden>Hide code</button>
+      </div>
+      <div id="now-idle" class="muted">Idle. A new suggestion starts right away.</div>
+      <div id="now-busy" hidden>
+        <p class="now-text" id="now-text"></p>
+        <ol id="now-steps" class="steps" aria-live="polite"></ol>
+        <div class="bar"><div id="now-bar" class="bar-fill"></div></div>
+        <div class="now-meta mono"><span id="now-elapsed"></span></div>
+        <pre id="now-code" class="code"></pre>
+      </div>
+    </section>
+
+    <section class="panel queue-panel">
+      <h2>Up next <span id="queue-count" class="count"></span></h2>
+      <div class="scroll">
+        <ol id="queue" class="queue"></ol>
+        <div id="queue-empty" class="muted">The line is empty.</div>
+        <ul id="recent" class="recent"></ul>
+      </div>
+    </section>
+
+    <section class="panel rules-panel" aria-labelledby="rules-h">
+      <div class="panel-head">
+        <h2 id="rules-h">Rules <span id="rules-count" class="count"></span></h2>
+        <div class="help">
+          <button id="rules-info-btn" class="help-btn info-btn" type="button" aria-label="What are rules?" aria-expanded="false" aria-controls="rules-info">i</button>
+          <div id="rules-info" class="help-box" role="dialog" aria-label="About rules" hidden>
+            <h2>What are rules?</h2>
+            <p>Most suggestions change the page once. A rule is a suggestion that keeps applying: ask for something
+              to happen on every change, like “update the title on every edit” or “each time, add a star”, and the
+              AI turns it into a rule.</p>
+            <p>Every change after that follows the rules too, on top of its own suggestion. If the two clash, the
+              suggestion wins that time.</p>
+            <p>Up to <strong id="help-rules-max">5</strong> rules are active at once, for everyone. A new rule pushes
+              out the oldest. To end one early, suggest “stop …”, or remove your own with Remove.</p>
+          </div>
+        </div>
+      </div>
+      <div class="scroll">
+        <ol id="rules" class="rules"></ol>
+        <p id="rules-empty" class="muted rules-empty">None yet. Ask for something to happen on every change, like
+          “update the title on every edit”, and it becomes a rule.</p>
+      </div>
+    </section>
+
+    <section class="panel history-panel">
+      <h2>History <span id="history-count" class="count"></span></h2>
+      <div class="scroll" id="history-scroll">
+        <ol id="history" class="history"></ol>
+        <button id="load-older" class="btn small load-older" type="button" hidden></button>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<div id="vtip" class="vtip" role="tooltip" hidden></div>
+
+<div id="focus-pill" class="focus-pill" role="note" hidden>
+  <span class="dot" aria-hidden="true"></span>
+  <span class="pill-txt">AI-written page. Never enter personal info.</span>
+  <button id="unfocus-btn" class="btn small" type="button">Show controls</button>
+</div>
+</body>
+</html>

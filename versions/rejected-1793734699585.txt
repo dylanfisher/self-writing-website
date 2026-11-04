@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Keeper's Ledger v8.0</title>
+<style>
+  body {
+    font-family: 'Georgia', serif;
+    background-color: #05070a;
+    color: #a8b2c1;
+    margin: 0;
+    overflow-x: hidden;
+    min-height: 100vh;
+    font-size: 14px;
+    transition: background-color 2s ease, filter 1s ease;
+    background-image: 
+      radial-gradient(circle at 50% 100%, rgba(160, 60, 10, 0.25), transparent 60%),
+      radial-gradient(circle at 20% 20%, rgba(0, 20, 40, 0.4), transparent 40%),
+      linear-gradient(rgba(5, 5, 5, 0.95), rgba(5, 7, 10, 0.95));
+  }
+
+  .main-container {
+    display: flex;
+    max-width: 1000px;
+    margin: 40px auto;
+    background: #11161d;
+    border: 4px double #2c3e50;
+    box-shadow: 0 0 50px rgba(190, 80, 30, 0.3);
+    min-height: 600px;
+    position: relative;
+    animation: containerBreath 10s infinite alternate ease-in-out;
+    transition: transform 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+  }
+
+  /* V8.0: Chaos Mode Animation */
+  .shake {
+    animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both !important;
+    border-color: #ff4d4d !important;
+    box-shadow: 0 0 50px rgba(255, 0, 0, 0.5) !important;
+  }
+
+  @keyframes containerBreath {
+    0% { box-shadow: 0 0 30px rgba(160, 60, 10, 0.2); }
+    100% { box-shadow: 0 0 60px rgba(190, 80, 30, 0.5); }
+  }
+  
+  @keyframes shake {
+    10%, 90% { transform: translate3d(-1px, 0, 0); }
+    20%, 80% { transform: translate3d(2px, 0, 0); }
+    30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+    40%, 60% { transform: translate3d(4px, 0, 0); }
+  }
+
+  .sidebar {
+    width: 200px;
+    background: #0d1219;
+    border-right: 1px solid #2c3e50;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .logo {
+    font-family: 'Times New Roman', serif;
+    font-weight: bold;
+    font-size: 22px;
+    color: #d4af37;
+    text-align: center;
+    border-bottom: 1px solid #d4af37;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    letter-spacing: 1px;
+    text-shadow: 0 0 5px rgba(212, 175, 55, 0.5);
+  }
+
+  .nav-link {
+    display: block;
+    color: #8899a6;
+    text-decoration: none;
+    padding: 5px;
+    font-family: 'Courier New', monospace;
+    text-transform: uppercase;
+    font-size: 12px;
+    transition: color 0.3s;
+  }
+
+  .nav-link:hover {
+    color: #d4af37;
+    padding-left: 10px;
+    border-left: 2px solid #d4af37;
+  }
+
+  .weather-widget {
+    margin-top: auto;
+    font-size: 10px;
+    color: #556677;
+    text-align: center;
+    border-top: 1px solid #2c3e50;
+    padding-top: 10px;
+    font-family: 'Courier New', monospace;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #2c3e50;
+    transition: all 0.5s;
+  }
+
+  .weather-critical { color: #ff4d4d; text-shadow: 0 0 5px #ff4d4d; }
+  .weather-cozy { color: #e67e22; text-shadow: 0 0 8px rgba(230, 126, 34, 0.6); }
+
+  .main-content {
+    flex: 1;
+    padding: 40px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .decay-word {
+    display: inline-block;
+    transition: transform 0.6s cubic-bezier(0.17, 0.67, 0.36, 0.95), opacity 1.2s ease;
+    transform-origin: center center;
+    opacity: 1;
+  }
+
+  .decay-word.decayed {
+    color: #6e2c00;
+    text-decoration: line-through;
+    transform: translateY(4px) rotate(1deg) scale(0.9);
+    opacity: 0.5;
+  }
+
+  .decay-word.scrap {
+    color: #ff5722;
+    opacity: 0.6;
+    transform: rotate(-5deg) translateY(20px);
+    position: relative;
+    z-index: 10;
+  }
+
+  h1 {
+    font-family: 'Times New Roman', serif;
+    color: #eceff1;
+    border-bottom: 2px solid #34495e;
+    padding-bottom: 10px;
+    font-size: 28px;
+    margin-top: 0;
+    font-style: italic;
+    margin-bottom: 20px;
+  }
+
+  h1 span {
+    color: #d4af37;
+    font-style: normal;
+    font-size: 14px;
+    vertical-align: middle;
+    display: inline-block;
+    margin-left: 10px;
+    border: 1px solid #d4af37;
+    padding: 2px 6px;
+  }
+
+  p {
+    line-height: 1.8;
+    color: #bdc3c7;
+    font-size: 15px;
+    margin-bottom: 20px;
+  }
+
+  .keeper-verse {
+    margin: 30px 0;
+    padding: 20px;
+    border: 1px solid #2c3e50;
+    background: rgba(0, 0, 0, 0.2);
+    text-align: center;
+    font-family: 'Times New Roman', serif;
+    font-style: italic;
+    font-size: 18px;
+    color: #e67e22;
+    position: relative;
+    cursor: default;
+    transition: border-color 2s, background-color 2s;
+    box-shadow: 0 0 15px rgba(230, 126, 34, 0.1) inset;
+  }
+
+  .keeper-verse::before, .keeper-verse::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; height: 1px;
+    background: rgba(230, 126, 34, 0.3);
+  }
+  .keeper-verse::before { top: 0; }
+  .keeper-verse::after { bottom: 0; }
+
+  .keeper-verse:hover {
+    border-color: #ff9800;
+    background: rgba(230, 126, 34, 0.05);
+    box-shadow: 0 0 25px rgba(230, 126, 34, 0.2) inset;
+  }
+
+  .verse-line {
+    display: block;
+    opacity: 0.9;
+    transition: opacity 0.3s;
+  }
+
+  .verse-line:hover {
+    opacity: 1;
+    color: #ffe0b2;
+    text-shadow: 0 0 8px rgba(230, 126, 34, 0.6);
+  }
+
+  .arena-wrapper {
+    margin: 20px 0;
+    background: #080b10;
+    border: 4px solid #2c3e50;
+    box-shadow: inset 0 0 20px #000;
+    position: relative;
+    height: 250px;
+    overflow: hidden;
+    cursor: crosshair;
+    transition: border-color 0.3s;
+  }
+
+  .target {
+    width: 50px;
+    height: 15px;
+    background: transparent;
+    position: absolute;
+    cursor: pointer;
+    opacity: 0.8;
+  }
+
+  .target::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 10px;
+    background: #e67e22;
+    border-radius: 50%;
+    box-shadow: 0 0 10px #ff5722;
+    animation: float 2s infinite ease-in-out;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    background: #18202b;
+    padding: 10px;
+    border: 1px solid #2c3e50;
+    font-family: 'Courier New', monospace;
+    color: #76a3b8;
+    letter-spacing: 1px;
+    transition: background 0.3s;
+  }
+
+  .logbook-section {
+    margin-top: 40px;
+    border-top: 2px solid #2c3e50;
+    padding-top: 20px;
+  }
+
+  .log-entry {
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px;
+    margin-bottom: 10px;
+    border-left: 3px solid #d4af37;
+    font-size: 13px;
+    border-bottom: 1px solid #1c2633;
+    transition: transform 0.3s;
+  }
+
+  .log-entry:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .log-date {
+    color: #d4af37;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .retro-form {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 15px;
+  }
+
+  input {
+    background: #080b10;
+    border: 1px solid #34495e;
+    color: #e67e22;
+    padding: 8px;
+    font-family: 'Courier New', monospace;
+    flex: 1;
+  }
+
+  input:focus { outline: 1px solid #d4af37; }
+
+  button {
+    background: #2c3e50;
+    color: #d4af37;
+    border: 1px solid #d4af37;
+    padding: 8px 20px;
+    cursor: pointer;
+    font-weight: bold;
+    text-transform: uppercase;
+    font-family: 'Courier New', monospace;
+    transition: all 0.3s;
+  }
+
+  button:hover {
+    background: #d4af37;
+    color: #0d1219;
+    box-shadow: 0 0 10px rgba(212, 175, 55, 0.4);
+  }
+  
+  .rain-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.1'/%3E%3C/svg%3E");
+    pointer-events: none;
+    opacity: 0.5;
+    animation: rain 0.5s linear infinite;
+    z-index: 0;
+    display: none;
+  }
+  
+  @keyframes rain {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 20px; }
+  }
+
+  .fire-spark {
+    position: fixed;
+    width: 2px;
+    height: 2px;
+    background: #ff9800;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 0;
+    box-shadow: 0 0 4px #ff5722;
+  }
+  
+  /* NEW VISITOR ELEMENTS */
+  .eye-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 100;
+    width: 40px;
+    height: 40px;
+    background: #0d1219;
+    border: 2px solid #2c3e50;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  
+  .eye-pupil {
+    width: 16px;
+    height: 16px;
+    background: #d4af37;
+    border-radius: 50%;
+    transform: translate(0px, 0px);
+    transition: transform 0.1s;
+    box-shadow: 0 0 5px #d4af37;
+  }
+  
+  .blink-anim {
+    animation: blinker 4s linear infinite;
+  }
+  
+  @keyframes blinker {
+    50% { transform: scaleY(0); }
+  }
+
+  .hidden-message {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #0d1219;
+    font-family: 'Courier New';
+    font-weight: bold;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+</style>
+</head>
+<body>
+  <div class="rain-overlay" id="rain-overlay"></div>
+  
+  <!-- Observer Eye -->
+  <div class="eye-container">
+    <div class="eye-pupil" id="pupil"></div>
+  </div>
+
+  <div class="main-container">
+    <div class="sidebar">
+      <div class="logo" id="logo-text">ST. MARY'S LIGHT</div>
+      
+      <nav>
+        <a href="#" class="nav-link" id="nav-log">Logbook</a>
+        <a href="#" class="nav-link" id="nav-sched">Watch Schedule</a>
+        <a href="#" class="nav-link" id="nav-weather">Weather Data</a>
+        <a href="#logbook" class="nav-link" id="nav-inq">Inquiries</a>
+      </nav>
+
+      <div class="weather-widget" id="weather-display">
+        <span id="weather-temp">TEMP: 4°C</span><br>
+        <span id="weather-cond">COND: CALM</span><br>
+        <span id="weather-wind">WIND: 10 KTS</span><br>
+        <br>
+        <span id="weather-alert" style="color: #556677;">---</span>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <h1>The Keeper's Diary <span id="current-date">Oct 14</span></h1>
+      
+      <p id="decay-text">The wind howls against the iron shutters. The cold bites deep, but the hearth is bright. We burn wood and time alike. The sea claims everything eventually. History is written by the victors, but eroded by the salt.</p>
+      
+      <p id="decay-text-2">Scrolling further will degrade the records. Time is an enemy. The light burns, but the ink fades. We watch the horizon until we cannot see.</p>
+
+      <div class="keeper-verse" id="keeper-verse" title="Hover to read">
+        <span class="verse-line">I burn the oil to bite the dark apart,</span>
+        <span class="verse-line">A golden finger pointing at the sea.</span>
+        <span class="verse-line">They pray below for safety from my art,</span>
+        <span class="verse-line">While I remain, unmovable, alone with thee.</span>
+        <span class="verse-line">The glass is cold, the gears grind slow and deep,</span>
+        <span class="verse-line">I wake the dark, the dark refuses sleep.</span>
+      </div>
+
+      <div class="status-bar">
+        <span id="status-text">ATMOSPHERE: COZY</span>
+        <span>LIGHTS TRIMMED: <span id="score" style="color: #d4af37;">0000</span></span>
+      </div>
+
+      <div class="arena-wrapper" id="game-area">
+        <div class="hidden-message" id="arena-msg">THE EYE IS OPEN</div>
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #3d1e0f; pointer-events: none; font-family: monospace; letter-spacing: 2px;" id="arena-instruction">
+          [ STOKING FIRE ]
+        </div>
+      </div>
+
+      <div class="logbook-section" id="logbook">
+        <div class="retro-form">
+          <input type="text" id="gb-name" placeholder="Visitor ID">
+          <input type="text" id="gb-msg" placeholder="Report sighting...">
+          <button onclick="postGuestbook()">LOG ENTRY</button>
+        </div>
+
+        <div id="guestbook-entries">
+          <div class="log-entry">
+            <span class="log-date">14:02 - Chief Keeper J. Doe</span>
+            <div>Squall line passing to the east. Adjusted lens rotation.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- DECAY SYSTEM INITIALIZATION ---
+    const paragraphs = document.querySelectorAll('p[id^="decay-text"]');
+    
+    paragraphs.forEach(p => {
+        const text = p.textContent;
+        const words = text.split(' ');
+        p.innerHTML = '';
+        
+        words.forEach((word, index) => {
+            const span = document.createElement('span');
+            span.className = 'decay-word';
+            span.textContent = word + ' ';
+            span.dataset.rotation = (Math.random() * 6 - 3) + 'deg'; 
+            p.appendChild(span);
+        });
+    });
+
+    const decayWords = document.querySelectorAll('.decay-word');
+
+    function handleScroll() {
+        const windowBottom = window.innerHeight + window.scrollY;
+        
+        decayWords.forEach((word, index) => {
+            const rect = word.getBoundingClientRect();
+            const wordBottom = rect.top + rect.height + window.scrollY;
+            
+            if (wordBottom < 0) {
+                if (!word.classList.contains('decayed')) {
+                    word.classList.add('decayed');
+                    word.style.transform = `translateY(${Math.random() * 10 + 2}px) rotate(${word.dataset.rotation})`;
+                }
+            } else if (wordBottom > windowBottom) {
+                if (word.classList.contains('decayed')) {
+                    word.classList.remove('decayed');
+                    word.style.transform = 'none';
+                }
+            }
+        });
+    }
+
+    window.addEventListener('scroll', handleScroll);
+    handleScroll();
+
+
+    // --- CORE GAME LOGIC ---
+    let score = 0;
+    let surpriseMode = false;
+    let surpriseTrigger = 0;
+
+    const weatherState = {
+      temp: '4°C',
+      cond: 'CALM',
+      wind: '10 KTS',
+      alert: '---'
+    };
+
+    const conditions = [
+      { name: 'CLEAR', temp: '8°C', wind: '5 KTS', alert: 'STARS VISIBLE' },
+      { name: 'FOGGY', temp: '6°C', wind: '8 KTS', alert: 'LIGHT BEACON' },
+      { name: 'DRIZZLE', temp: '4°C', wind: '15 KTS', alert: 'DECK SLIPPERY' },
+      { name: 'STORM', temp: '2°C', wind: '40 KTS', alert: 'BRACING HULL' },
+      { name: 'COZY', temp: '22°C', wind: '0 KTS', alert: 'FIRE CRACKLING' }
+    ];
+
+    function spawnTarget() {
+        const area = document.getElementById('game-area');
+        if (area.children.length > 15) return;
+
+        const target = document.createElement('div');
+        target.className = 'target';
+        
+        const maxX = area.clientWidth - 50;
+        const maxY = area.clientHeight - 20;
+        target.style.left = Math.floor(Math.random() * maxX) + 'px';
+        target.style.top = Math.floor(Math.random() * maxY) + 'px';
+
+        let dx = (Math.random() > 0.5 ? 1.5 : -1.5);
+        let dy = (Math.random() > 0.5 ? 0.5 : -0.5);
+
+        function moveTarget() {
+            let l = parseFloat(target.style.left);
+            let t = parseFloat(target.style.top);
+            
+            if (l <= 0 || l >= maxX) dx *= -1;
+            if (t <= 0 || t >= maxY) dy *= -1;
+
+            target.style.left = l + dx + 'px';
+            target.style.top = t + dy + 'px';
+            
+            if(area.contains(target)) requestAnimationFrame(moveTarget);
+        }
+
+        moveTarget();
+        
+        target.addEventListener('click', (e) => {
+            e.stopPropagation();
+            
+            if (surpriseMode) {
+                // Evasion behavior
+                target.style.display = 'none';
+                triggerSurprise();
+            } else {
+                score += 1;
+                surpriseTrigger += 1;
+                
+                // TRIGGER: After 10 "clicks" on normal targets, start the surprise
+                if (surpriseTrigger >= 10) {
+                    surpriseMode = true;
+                    document.getElementById('arena-instruction').style.display = 'none';
+                    document.getElementById('arena-msg').style.opacity = '1';
+                }
+                
+                document.getElementById('score').innerText = String(score).padStart(4, '0');
+                
+                const ripple = document.createElement('div');
+                ripple.style.position = 'absolute';
+                ripple.style.left = (e.clientX - area.getBoundingClientRect().left) + 'px';
+                ripple.style.top = (e.clientY - area.getBoundingClientRect().top) + 'px';
+                ripple.style.width = '20px';
+                ripple.style.height = '20px';
+                ripple.style.border = '2px solid #ff9800';
+                ripple.style.borderRadius = '50%';
+                ripple.style.transform = 'translate(-50%, -50%) scale(0)';
+                ripple.style.transition = 'transform 0.5s, opacity 0.5s';
+                ripple.style.opacity = '1';
+                ripple.style.pointerEvents = 'none';
+                area.appendChild(ripple);
+
+                requestAnimationFrame(() => {
+                    ripple.style.transform = 'translate(-50%, -50%) scale(3)';
+                    ripple.style.opacity = '0';
+                });
+
+                setTimeout(() => ripple.remove(), 500);
+                target.remove();
+            }
+        });
+        
+        area.appendChild(target);
+        setTimeout(() => {
+            if (area.contains(target)) target.remove();
+        }, 3000);
+    }
+
+    function triggerSurprise() {
+        // V8.0 Surprise Feature
+        const container = document.querySelector('.main-container');
+        container.classList.add('shake');
+        document.body.style.filter = 'invert(1) hue-rotate(180deg)';
+        
+        setTimeout(() => {
+            container.classList.remove('shake');
+            document.body.style.filter = 'none';
+        }, 600);
+    }
+
+    setInterval(spawnTarget, 800);
+
+    // --- DYNAMIC WEATHER ENGINE ---
+    function updateWeather() {
+        const nextCond = conditions[Math.floor(Math.random() * conditions.length)];
+        
+        document.getElementById('weather-temp').innerText = `TEMP: ${nextCond.temp}`;
+        document.getElementById('weather-cond').innerText = `COND: ${nextCond.name}`;
+        document.getElementById('weather-wind').innerText = `WIND: ${nextCond.wind}`;
+        document.getElementById('weather-alert').innerText = `>>> ${nextCond.alert}`;
+        
+        const alertEl = document.getElementById('weather-alert');
+        const statusEl = document.getElementById('status-text');
+        const rainOverlay = document.getElementById('rain-overlay');
+        const gameArea = document.getElementById('game-area');
+        const verse = document.getElementById('keeper-verse');
+        const gameInstruction = document.getElementById('arena-instruction');
+        const arenaMsg = document.getElementById('arena-msg');
+        const navLinks = document.querySelectorAll('.nav-link');
+        const logo = document.getElementById('logo-text');
+
+        alertEl.className = '';
+        
+        if (nextCond.name === 'COZY') {
+            alertEl.classList.add('weather-cozy');
+            statusEl.innerText = 'ATMOSPHERE: WARM';
+            statusEl.style.color = '#ff9800';
+            rainOverlay.style.display = 'none';
+            gameArea.style.borderColor = '#6e2c00';
+            document.body.style.backgroundImage = `
+                linear-gradient(rgba(40, 15, 0, 0.8), rgba(5, 7, 10, 0.95)),
+                radial-gradient(circle at 50% 100%, rgba(200, 80, 20, 0.5), transparent 60%)
+            `;
+            verse.style.borderColor = '#ff9800';
+            spawnSparks();
+            
+            // Surprise Text Change
+            if (surpriseMode) {
+                logo.innerText = "RUN AWAY";
+                logo.style.color = "#ff4d4d";
+                navLinks.forEach(l => {
+                    l.style.color = "#ff4d4d";
+                    l.innerText = "DON'T LOOK";
+                });
+            }
+        } else if (nextCond.name === 'STORM' || nextCond.name === 'BLIZZARD') {
+            alertEl.classList.add('weather-critical');
+            statusEl.innerText = 'ATMOSPHERE: HOSTILE';
+            statusEl.style.color = '#ff4d4d';
+            rainOverlay.style.display = 'block';
+            gameArea.style.borderColor = '#552020';
+            verse.style.borderColor = '#ff4d4d';
+            document.body.style.backgroundImage = `
+                linear-gradient(rgba(20, 0, 0, 0.7), rgba(5, 7, 10, 0.95)),
+                radial-gradient(circle at 20% 80%, rgba(40, 0, 0, 0.4), transparent 40%)
+            `;
+        } else if (nextCond.name === 'FOGGY') {
+            alertEl.classList.add('weather-storm');
+            statusEl.innerText = 'ATMOSPHERE: OBSCURED';
+            statusEl.style.color = '#8abce3';
+            rainOverlay.style.display = 'none';
+            gameArea.style.borderColor = '#34495e';
+            verse.style.borderColor = '#8abce3';
+        } else {
+            statusEl.innerText = 'ATMOSPHERE: STABLE';
+            statusEl.style.color = '#76a3b8';
+            rainOverlay.style.display = 'none';
+            gameArea.style.borderColor = '#2c3e50';
+            verse.style.borderColor = '#2c3e50';
+        }
+    }
+
+    setInterval(updateWeather, 3000);
+    updateWeather();
+
+    // --- COZY SPARKLE EFFECT ---
+    function spawnSparks() {
+        const sparkCount = 10;
+        for (let i = 0; i < sparkCount; i++) {
+            const spark = document.createElement('div');
+            spark.className = 'fire-spark';
+            document.body.appendChild(spark);
+            
+            const x = Math.random() * window.innerWidth;
+            const y = window.innerHeight - Math.random() * 200;
+            const duration = 1000 + Math.random() * 2000;
+            
+            spark.style.left = x + 'px';
+            spark.style.top = y + 'px';
+            spark.style.opacity = '0.8';
+            
+            const animation = spark.animate([
+                { transform: `translate(${Math.random()*20 - 10}px, 0) scale(1)`, opacity: 0.8 },
+                { transform: `translate(${Math.random()*40 - 20}px, -${Math.random()*100 + 50}px) scale(0)`, opacity: 0 }
+            ], {
+                duration: duration,
+                easing: 'ease-out'
+            });
+            
+            animation.onfinish = () => spark.remove();
+        }
+    }
+    
+    setInterval(spawnSparks, 500);
+
+    // Logbook Logic
+    function postGuestbook() {
+        const name = document.getElementById('gb-name').value || "Unknown Sailor";
+        let msg = document.getElementById('gb-msg').value || "Transmission garbled.";
+        const container = document.getElementById('guestbook-entries');
+
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        
+        const date = new Date();
+        const timeStr = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+        // Surprise text injection
+        if (surpriseMode && Math.random() > 0.5) {
+            msg = "IT'S BEHIND ME!";
+        }
+
+        entry.innerHTML = `
+            <span class="log-date">${timeStr} - ${name}</span>
+            <div>${msg}</div>
+        `;
+        
+        container.prepend(entry);
+        document.getElementById('gb-name').value = '';
+        document.getElementById('gb-msg').value = '';
+    }
+
+    // --- THE SURPRISE MECHANICS ---
+    // 1. The Eye (Observer)
+    const pupil = document.getElementById('pupil');
+    const eyeContainer = document.querySelector('.eye-container');
+    
+    // Blink
+    setInterval(() => {
+        pupil.classList.add('blink-anim');
+        setTimeout(() => pupil.classList.remove('blink-anim'), 200);
+    }, 4000);
+
+    document.addEventListener('mousemove', (e) => {
+        const x = e.clientX;
+        const y = e.clientY;
+        const eyeRect = eyeContainer.getBoundingClientRect();
+        const eyeX = eyeRect.left + eyeRect.width / 2;
+        const eyeY = eyeRect.top + eyeRect.height / 2;
+        
+        const angle = Math.atan2(y - eyeY, x - eyeX);
+        const distance = Math.min(
+            Math.hypot(x - eyeX, y - eyeY) / 5, 
+            8
+        );
+        
+        const moveX = Math.cos(angle) * distance;
+        const moveY = Math.sin(angle) * distance;
+        
+        pupil.style.transform = `translate(${moveX}px, ${moveY}px)`;
+    });
+
+    // 2. The Glitch (Chaos Mode)
+    // If the user is inactive for a while, or just randomly, something creepy happens
+    
+    let inactivityTimeout;
+    function resetTimer() {
+        clearTimeout(inactivityTimeout);
+        inactivityTimeout = setTimeout(() => {
+            // "Surprise me" -> The light goes out
+            const container = document.querySelector('.main-container');
+            const body = document.body;
+            
+            // Random creepy text for the verse
+            const verseLines = document.querySelectorAll('.verse-line');
+            const creepyPhrases = [
+                "DON'T TURN AROUND",
+                "IT SEEKS THE HEARTH",
+                "THE LOG ENDS HERE",
+                "I AM THE LIGHT",
+                "ERROR. LOGIC CORRUPTED"
+            ];
+            
+            // Apply random chaos
+            container.style.transform = `rotate(${Math.random() * 2 - 1}deg) scale(0.98)`;
+            container.querySelectorAll('.log-entry').forEach(el => {
+                el.style.transform = `rotate(${Math.random() * 6 - 3}deg)`;
+            });
+            
+            // Change a random verse line
+            const randomLine = verseLines[Math.floor(Math.random() * verseLines.length)];
+            randomLine.innerText = creepyPhrases[Math.floor(Math.random() * creepyPhrases.length)];
+            randomLine.style.color = "#ff4d4d";
+            randomLine.style.fontWeight = "bold";
+
+            // Reset after 3 seconds
+            setTimeout(() => {
+                container.style.transform = 'none';
+                document.querySelectorAll('.log-entry').forEach(el => el.style.transform = 'none');
+                // Restore verse (simple way is to reload the page or we can try to swap back, 
+                // but for chaos, let's keep the "scar" text for a bit then fade it back or leave it as a glitch)
+                // We'll just let the glitch persist until next weather update or interaction
+            }, 3000);
+
+        }, 15000); // 15 seconds of inactivity
+    }
+
+    ['mousemove', 'keydown', 'click'].forEach(evt => {
+        document.addEventListener(evt, resetTimer);
+    });
+
+    resetTimer(); // Init
+
+  </script>
+</body>
+</html>

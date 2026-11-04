@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Frog's ~Cyber~ Pool v1.1</title>
+<style>
+  @font-face {
+    font-family: 'Pixel';
+    src: local('Courier New');
+  }
+
+  body {
+    font-family: 'Courier New', monospace;
+    background-color: #000000;
+    background-image: radial-gradient(circle, #111 1px, transparent 1px);
+    background-size: 20px 20px;
+    color: #00ff00;
+    margin: 0;
+    text-align: center;
+    overflow-x: hidden;
+    min-height: 100vh;
+    font-size: 14px;
+    cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><text y="15" font-size="15">👆</text></svg>'), auto;
+  }
+
+  /* 90s Marquee */
+  .marquee-container {
+    background: #000080;
+    color: #ffff00;
+    font-weight: bold;
+    border-top: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+    padding: 5px 0;
+    position: sticky;
+    top: 0;
+    z-index: 500;
+    font-size: 16px;
+    text-shadow: 1px 1px 0 #000;
+  }
+
+  /* Classic Table Layout */
+  .layout-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 20px auto;
+    background: #0a151e;
+    border: 4px ridge #4dd0e1;
+    width: 90%; /* Slightly wider to fit new Guestbook */
+    max-width: 900px;
+    box-shadow: 10px 10px 0px rgba(0,0,0,0.8);
+  }
+
+  td {
+    padding: 10px;
+    vertical-align: top;
+    border: 1px inset #4dd0e1;
+  }
+
+  .sidebar {
+    width: 150px;
+    background: #050a10;
+    text-align: left;
+    font-size: 0.9rem;
+  }
+
+  .sidebar a {
+    display: block;
+    color: #ff00ff;
+    text-decoration: underline;
+    margin-bottom: 8px;
+    font-weight: bold;
+  }
+  .sidebar a:hover { background: #4dd0e1; color: #000; text-decoration: none; }
+
+  /* Retro Headers */
+  h1 {
+    font-family: 'Comic Sans MS', 'Chalkboard SE', sans-serif;
+    color: #ffff00;
+    text-shadow: 2px 2px 0 #ff0000, -1px -1px 0 #0000ff;
+    font-size: 2.5rem;
+    margin: 10px 0;
+    animation: rainbow 2s linear infinite;
+  }
+
+  @keyframes rainbow {
+    0% { color: #ff0000; }
+    20% { color: #ffff00; }
+    40% { color: #00ff00; }
+    60% { color: #00ffff; }
+    80% { color: #0000ff; }
+    100% { color: #ff00ff; }
+  }
+
+  /* Retro Buttons & Forms */
+  .retro-btn {
+    background: #c0c0c0;
+    border-top: 2px solid #fff;
+    border-left: 2px solid #fff;
+    border-right: 2px solid #000;
+    border-bottom: 2px solid #000;
+    color: #000;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-weight: bold;
+    padding: 4px 10px;
+    text-decoration: none;
+    display: inline-block;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  
+  .retro-btn:active {
+    border-top: 2px solid #000;
+    border-left: 2px solid #000;
+    border-right: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+  }
+
+  .login-container, .guestbook-entry {
+    background: #c0c0c0;
+    border: 2px outset #fff;
+    padding: 10px;
+    margin-top: 10px;
+    color: #000;
+  }
+
+  input[type="text"], input[type="email"], textarea {
+    background: #fff;
+    border: 2px inset #808080;
+    width: 80%;
+    font-family: 'Courier New', monospace;
+    margin-bottom: 5px;
+    padding: 2px;
+    color: #000;
+  }
+
+  /* The "Laser" Game */
+  .laser-text {
+    color: #ff0000;
+    font-family: 'Impact', sans-serif;
+    letter-spacing: 2px;
+    background: #222;
+    padding: 5px;
+    border: 2px dashed #ff0000;
+    margin: 20px 0;
+  }
+
+  .game-area {
+    position: relative;
+    height: 300px; /* Shrunk slightly to fit new content */
+    background: #000033;
+    border: 2px inset #808080;
+    overflow: hidden;
+  }
+
+  /* 90s Decorations */
+  hr.retro {
+    border: 0;
+    height: 1px;
+    background-image: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 255, 0, 0.75), rgba(0, 0, 0, 0));
+    margin: 20px 0;
+  }
+
+  .guestbook {
+    text-align: left;
+    background: #1a1a1a;
+    border: 4px inset #333;
+    padding: 10px;
+    margin-top: 20px;
+    color: #eee;
+  }
+  
+  .guestbook h3 {
+    text-align: center;
+    color: #ff00ff;
+    font-family: 'Comic Sans MS', cursive;
+    border-bottom: 1px dashed #ff00ff;
+  }
+
+  .guestbook-message {
+    background: #000066;
+    border: 1px solid #0000cc;
+    padding: 5px;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+    color: #00ffff;
+  }
+
+  .guestbook-user {
+    color: #ffff00;
+    font-weight: bold;
+    font-size: 0.8em;
+  }
+
+  .fire { 
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    background: linear-gradient(to top, red, yellow);
+    animation: burn 0.5s infinite alternate;
+  }
+
+  @keyframes burn {
+    from { height: 15px; border-radius: 50%; }
+    to { height: 25px; border-radius: 30%; }
+  }
+
+  /* Target Styles */
+  .target {
+    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="red"/><circle cx="50" cy="50" r="20" fill="white"/><circle cx="50" cy="50" r="5" fill="black"/></svg>') no-repeat center;
+    background-size: contain;
+    width: 40px;
+    height: 40px;
+    position: absolute;
+    cursor: help;
+    z-index: 100;
+  }
+
+  .construction-bar {
+    background: repeating-linear-gradient(45deg, #ffcc00, #ffcc00 10px, #000 10px, #000 20px);
+    height: 15px;
+    width: 100%;
+    margin: 5px 0;
+  }
+  
+  .blink {
+    animation: blinker 1s linear infinite;
+  }
+  @keyframes blinker {
+    50% { opacity: 0; }
+  }
+
+  /* Visitor Counter */
+  .counter {
+    display: inline-block;
+    background: #000;
+    color: #f00;
+    font-family: 'Courier New', monospace;
+    border: 1px inset #555;
+    padding: 2px 5px;
+    letter-spacing: 3px;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+
+  <div class="marquee-container">
+    <marquee scrollamount="10">~*~ Welcome to The Frog's Cyber-Swamp! ~*~ CLICK TARGETS! ~*~ NEW GUESTBOOK SECTION AVAILABLE ~*~ Under Construction ~*~</marquee>
+  </div>
+
+  <table class="layout-table">
+    <tr>
+      <!-- Sidebar -->
+      <td class="sidebar">
+        <div class="construction-bar"></div>
+        <b>NAVIGATION</b><br><br>
+        <a href="#" onclick="event.preventDefault()">Home</a>
+        <a href="#" onclick="event.preventDefault()">About Me</a>
+        <a href="#" onclick="event.preventDefault()">Links</a>
+        <a href="#" onclick="scrollToGuestbook()">Guestbook (NEW!)</a>
+        <a href="#" onclick="event.preventDefault()">Webrings</a>
+        <hr class="retro">
+        <center>
+          <span class="fire"></span><br>
+          <span class="fire"></span><br>
+          <span class="fire"></span>
+        </center>
+        <br>
+        <small>Visitor Count:</small><br>
+        <div class="counter" id="visitor-count">004821</div>
+        <div class="construction-bar"></div>
+      </td>
+
+      <!-- Main Content -->
+      <td>
+        <h1>The Hunting Pool <span class="blink">★</span></h1>
+        <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='40'><rect width='300' height='40' fill='none'/><text x='10' y='25' fill='cyan' font-family='monospace' font-size='20'>WELCOME TO THE WEB!</text></svg>" alt="Banner">
+        
+        <p>Hey there, surfer! You've stumbled upon my corner of the information superhighway.</p>
+
+        <div class="laser-text">
+            WARNING: HIGH VOLTAGE TONGUE ACTIVATED
+        </div>
+
+        <p>Help me catch the bugs in the arena below!</p>
+
+        <!-- Score Display -->
+        <div style="background: #c0c0c0; border: 2px outset #fff; display: inline-block; padding: 2px 10px; font-weight: bold; color: #000;">
+            SCORE: <span id="score" style="color: red; font-family: 'Courier New', monospace; font-size: 1.2em;">0000</span>
+        </div>
+        
+        <hr class="retro">
+
+        <!-- Game Area -->
+        <div class="game-area" id="game-area">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #4dd0e1; pointer-events: none;">
+                [ GAME STARTING... ]
+            </div>
+        </div>
+
+        <hr class="retro">
+
+        <!-- Login Form -->
+        <div class="login-container">
+            <div style="font-weight: bold; margin-bottom: 5px;">Member Access</div>
+            <input type="email" id="email" placeholder="Email">
+            <br>
+            <button class="retro-btn" onclick="attemptLogin()">LOGIN</button>
+            <div id="login-msg" style="color: red; font-weight: bold; margin-top: 5px;"></div>
+        </div>
+
+        <!-- NEW GUESTBOOK SECTION -->
+        <div class="guestbook" id="guestbook-section">
+            <h3>✒️ SIGN THE GUESTBOOK ✒️</h3>
+            
+            <div style="margin-bottom: 10px;">
+                <input type="text" id="gb-name" placeholder="Your Name (e.g. CoolFrog99)" style="width: 40%; display:inline-block;">
+                <input type="text" id="gb-msg" placeholder="Say something cool..." style="width: 40%; display:inline-block;">
+                <button class="retro-btn" onclick="postGuestbook()">SUBMIT</button>
+            </div>
+
+            <div id="guestbook-entries">
+                <!-- Pre-existing entry -->
+                <div class="guestbook-message">
+                    <div class="guestbook-user">xX_Froggy_Xx (10/24/98)</div>
+                    Cool site dude!! Added you to my links. Check out mine!<br>
+                    <small><i>Reply:</i> "Thx 4 the link!!"</small>
+                </div>
+            </div>
+        </div>
+        
+        <p style="font-size: 0.7rem; margin-top: 20px;">
+            Copyright © 1998 The Frog. All Rights Reserved.<br>
+            This site is <span class="blink">HACKED BY THE RAIN</span>
+        </p>
+
+      </td>
+    </tr>
+  </table>
+
+  <script>
+    // Game Logic
+    let score = 0;
+    let gameActive = true;
+
+    function scrollToGuestbook() {
+        document.getElementById('guestbook-section').scrollIntoView({behavior: 'auto'});
+    }
+
+    function attemptLogin() {
+      const email = document.getElementById('email').value;
+      const msgDiv = document.getElementById('login-msg');
+      const btn = document.querySelector('.login-container .retro-btn');
+
+      if(email && email.includes('@')) {
+        msgDiv.style.color = 'green';
+        msgDiv.innerText = "Access Granted! Welcome back, Administrator.";
+        btn.innerText = "LOGGED IN";
+        btn.disabled = true;
+        document.querySelector('.laser-text').innerText = "IDENTITY VERIFIED";
+      } else {
+        msgDiv.style.color = 'red';
+        msgDiv.innerText = "ACCESS DENIED: Invalid Email.";
+        document.querySelector('.login-container').style.animation = "shake 0.5s";
+        setTimeout(() => document.querySelector('.login-container').style.animation = "", 500);
+      }
+    }
+
+    const styleSheet = document.createElement("style");
+    styleSheet.innerText = `
+      @keyframes shake {
+        0% { transform: translate(1px, 1px) rotate(0deg); }
+        10% { transform: translate(-1px, -2px) rotate(-1deg); }
+        20% { transform: translate(-3px, 0px) rotate(1deg); }
+        30% { transform: translate(3px, 2px) rotate(0deg); }
+        40% { transform: translate(1px, -1px) rotate(1deg); }
+        50% { transform: translate(-1px, 2px) rotate(-1deg); }
+        60% { transform: translate(-3px, 1px) rotate(0deg); }
+        70% { transform: translate(3px, 1px) rotate(-1deg); }
+        80% { transform: translate(-1px, -1px) rotate(1deg); }
+        90% { transform: translate(1px, 2px) rotate(0deg); }
+        100% { transform: translate(1px, -2px) rotate(-1deg); }
+      }
+    `;
+    document.head.appendChild(styleSheet);
+
+    function spawnTarget() {
+        if (!gameActive) return;
+        const area = document.getElementById('game-area');
+        if (area.children.length > 10) return;
+
+        const target = document.createElement('div');
+        target.className = 'target';
+        
+        const maxX = area.clientWidth - 40;
+        const maxY = area.clientHeight - 40;
+        target.style.left = Math.floor(Math.random() * maxX) + 'px';
+        target.style.top = Math.floor(Math.random() * maxY) + 'px';
+
+        let dx = (Math.random() - 0.5) * 4;
+        let dy = (Math.random() - 0.5) * 4;
+
+        function moveTarget() {
+            if (!area.contains(target)) return;
+            let l = parseFloat(target.style.left);
+            let t = parseFloat(target.style.top);
+            
+            l += dx;
+            t += dy;
+
+            if (l <= 0 || l >= maxX) dx *= -1;
+            if (t <= 0 || t >= maxY) dy *= -1;
+
+            target.style.left = l + 'px';
+            target.style.top = t + 'px';
+            requestAnimationFrame(moveTarget);
+        }
+
+        moveTarget();
+        target.addEventListener('click', (e) => {
+            e.stopPropagation();
+            catchTarget(target, e.clientX, e.clientY);
+        });
+        area.appendChild(target);
+
+        setTimeout(() => {
+            if (area.contains(target)) {
+                target.remove();
+                if (Math.random() > 0.7) spawnTarget();
+            }
+        }, 3000);
+    }
+
+    function catchTarget(el, x, y) {
+        score++;
+        document.getElementById('score').innerText = String(score).padStart(4, '0');
+        
+        if(score % 5 === 0) {
+            setTimeout(() => alert("!!! NEW HIGH SCORE !!!"), 10);
+        }
+        
+        const area = document.getElementById('game-area');
+        const rect = area.getBoundingClientRect();
+        
+        const popup = document.createElement('div');
+        popup.innerText = "SLURP!";
+        popup.style.position = 'absolute';
+        popup.style.left = (x - rect.left) + 'px';
+        popup.style.top = (y - rect.top) + 'px';
+        popup.style.color = '#ff00ff';
+        popup.style.fontWeight = 'bold';
+        popup.style.fontFamily = 'Impact';
+        popup.style.pointerEvents = 'none';
+        popup.style.animation = 'blink 0.2s infinite';
+        area.appendChild(popup);
+        setTimeout(() => popup.remove(), 500);
+
+        el.remove();
+        setTimeout(spawnTarget, 500);
+    }
+
+    setInterval(spawnTarget, 1000);
+
+    setInterval(() => {
+        const counter = document.getElementById('visitor-count');
+        let val = parseInt(counter.innerText);
+        counter.innerText = String(val + 1).padStart(6, '0');
+    }, 4000);
+
+    // Guestbook Logic
+    function postGuestbook() {
+        const name = document.getElementById('gb-name').value || "Anonymous Toad";
+        const msg = document.getElementById('gb-msg').value || "Nothing to say...";
+        const container = document.getElementById('guestbook-entries');
+
+        if(!msg) return;
+
+        const entry = document.createElement('div');
+        entry.className = 'guestbook-message';
+        
+        const today = new Date();
+        const dateStr = (today.getMonth()+1) + '/' + today.getDate() + '/' + today.getFullYear().toString().substr(-2);
+
+        entry.innerHTML = `
+            <div class="guestbook-user">${name} (${dateStr})</div>
+            ${msg}
+        `;
+        
+        container.prepend(entry);
+        
+        // Clear inputs
+        document.getElementById('gb-name').value = '';
+        document.getElementById('gb-msg').value = '';
+    }
+  </script>
+</body>
+</html>

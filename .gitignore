@@ -1,0 +1,4 @@
+# Secrets (admin-token, ip-salt, secrets.env), the live database, backups and logs: never commit.
+data/
+node_modules/
+.DS_Store

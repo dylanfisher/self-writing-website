@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Version viewer</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 14px system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; gap: .5rem; align-items: center; padding: .5rem 1rem; border-bottom: 1px solid #8884; }
+  #fb { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
+  iframe { flex: 1; border: 0; width: 100%; background: white; }
+</style>
+</head>
+<body>
+<header>
+  <button id="prev">◀</button><strong id="label">v0</strong><button id="next">▶</button>
+  <span id="fb"></span><span>← → keys</span>
+</header>
+<!-- Same sandbox the real site will use: scripts only, opaque origin. -->
+<iframe id="f" sandbox="allow-scripts"></iframe>
+<!-- versions/log.js is generated from log.jsonl: window.LOG = [...] -->
+<script src="versions/log.js"></script>
+<script>
+  const LOG = window.LOG || [];
+  let n = 0;
+  const max = Math.max(0, ...LOG.filter(e => e.ok).map(e => e.version));
+  function show() {
+    document.getElementById("f").src = `versions/v${n}.html`;
+    document.getElementById("label").textContent = `v${n} / ${max}`;
+    const e = LOG.find(e => e.version === n);
+    document.getElementById("fb").textContent = e ? `“${e.feedback}” · ${e.bytes} B · ${Math.round(e.secs)}s` : "seed";
+  }
+  const go = d => { n = Math.min(max, Math.max(0, n + d)); show(); };
+  document.getElementById("prev").onclick = () => go(-1);
+  document.getElementById("next").onclick = () => go(1);
+  addEventListener("keydown", e => { if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1); });
+  show();
+</script>
+</body>
+</html>

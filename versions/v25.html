@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Keeper's Ledger v11.0</title>
+<style>
+  body {
+    font-family: 'Georgia', serif;
+    background-color: #05070a;
+    color: #a8b2c1;
+    margin: 0;
+    overflow-x: hidden;
+    height: 100vh;
+    font-size: 14px;
+    transition: background 1s;
+    background-image: radial-gradient(circle at 50% 50%, #1a202c 0%, #05070a 100%);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* --- BEAM & ATMOSPHERE --- */
+  .lighthouse-container {
+    position: fixed; top: 0; left: 50%; width: 0; height: 0;
+    z-index: 0; pointer-events: none; display: flex; justify-content: center;
+  }
+  .beam {
+    position: absolute; top: 0; left: 0; width: 40px; height: 1000px;
+    background: linear-gradient(to bottom, rgba(255,255,200,0.6), rgba(255,255,200,0) 80%);
+    filter: blur(8px);
+    opacity: 0.6;
+    animation: sweep 12s ease-in-out infinite alternate;
+    transform-origin: top center;
+  }
+  @keyframes sweep { 0% { transform: rotate(-25deg); opacity: 0.3; } 100% { transform: rotate(25deg); opacity: 0.6; } }
+
+  .rain-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.1'/%3E%3C/svg%3E");
+    pointer-events: none; opacity: 0.4; animation: rain 0.5s linear infinite; z-index: 0;
+  }
+  @keyframes rain { 0% { background-position: 0 0; } 100% { background-position: 0 20px; } }
+
+  /* --- STORY CONTAINER --- */
+  .story-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    z-index: 10;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  .story-card {
+    background: rgba(13, 18, 25, 0.95);
+    border: 1px solid #2c3e50;
+    box-shadow: 0 0 40px rgba(0,0,0,0.8);
+    padding: 40px;
+    position: relative;
+    width: 100%;
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* --- TYPOGRAPHY & UI --- */
+  h1 { font-family: 'Times New Roman', serif; color: #eceff1; font-style: italic; margin: 0 0 10px 0; font-size: 24px; }
+  .scene-meta { font-family: 'Courier New', monospace; color: #556677; font-size: 10px; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 5px; }
+  
+  .story-text {
+    font-size: 18px;
+    line-height: 1.6;
+    margin-bottom: 30px;
+    min-height: 100px;
+    color: #ccc;
+  }
+  
+  .choices {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: auto;
+  }
+  
+  .choice-btn {
+    background: #18202b;
+    border: 1px solid #445566;
+    color: #a8b2c1;
+    padding: 12px;
+    text-align: left;
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    transition: all 0.2s;
+    position: relative;
+  }
+  
+  .choice-btn:hover {
+    border-color: #d4af37;
+    color: #d4af37;
+    background: #1a2530;
+    padding-left: 20px;
+  }
+  .choice-btn::before {
+    content: '>';
+    position: absolute;
+    left: 5px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .choice-btn:hover::before { opacity: 1; }
+
+  /* --- HEADER & FOOTER --- */
+  .header-bar {
+    text-align: center;
+    padding: 20px;
+    z-index: 10;
+  }
+  .title {
+    font-family: 'Courier New', monospace;
+    color: #d4af37;
+    font-size: 12px;
+    letter-spacing: 2px;
+    border-bottom: 1px solid #333;
+    display: inline-block;
+    padding-bottom: 5px;
+  }
+  
+  .status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: #000;
+    border-top: 1px solid #333;
+    padding: 5px;
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    color: #556677;
+    display: flex;
+    justify-content: space-between;
+    z-index: 100;
+  }
+  
+  .status-light { color: #ff5722; display: inline-block; width: 8px; height: 8px; background: #ff5722; border-radius: 50%; animation: blink 2s infinite; }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .hidden { display: none !important; }
+
+</style>
+</head>
+<body>
+  <div class="rain-overlay"></div>
+  <div class="lighthouse-container"><div class="beam"></div></div>
+
+  <div class="header-bar">
+    <div class="title">THE KEEPER'S LEDGER // INTERACTIVE SEQUENCE</div>
+  </div>
+
+  <div class="story-wrapper">
+    <div class="story-card" id="game-container">
+      <!-- Content injected by JS -->
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>CONN: SECURE</span>
+    <span><span class="status-light"></span> MONITORING ACTIVE</span>
+    <span id="clock">00:00:00</span>
+  </div>
+
+  <script>
+    // --- GAME ENGINE ---
+    const container = document.getElementById('game-container');
+    
+    // Audio context for simple effects
+    let audioCtx;
+    const playClick = () => {
+      if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = 800;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.1);
+    };
+
+    const scenes = {
+      start: {
+        title: "The Logbook",
+        text: "You are the Keeper. The lamp just went out. The fog is pressing against the glass, thick and oily. The logbook lies open on the desk. A red emergency button pulses next to a heavy iron lever.",
+        choices: [
+          { text: "Check the logbook first.", target: "logbook" },
+          { text: "Manually relight the lamp.", target: "lamp" },
+          { text: "Check the door.", target: "door" }
+        ]
+      },
+      logbook: {
+        title: "Previous Entries",
+        text: "The ink is wet on the last entry: 'It knows we are here. Do not open the door on the third bell.' You hear a slow, deep tolling from outside. One... Two...",
+        choices: [
+          { text: "Ignore the bell, go to the lamp.", target: "lamp" },
+          { text: "Open the door immediately.", target: "death_door" },
+          { text: "Hide under the desk.", target: "hide" }
+        ]
+      },
+      lamp: {
+        title: "The Lantern Room",
+        text: "You climb the spiral stairs. The mechanism is jammed with ice—or something crystalline. If you kick it, you might break the glass.",
+        choices: [
+          { text: "Kick the mechanism.", target: "kick" },
+          { text: "Use the flares in the corner.", target: "flares" }
+        ]
+      },
+      door: {
+        title: "The Airlock",
+        text: "Water is pouring under the seal. You hear a voice from the outside. 'Let me in, I have the spare parts.' It sounds exactly like your mother.",
+        choices: [
+          { text: "Open the airlock.", target: "death_water" },
+          { text: "Stay away.", target: "start" }
+        ]
+      },
+      kick: {
+        title: "Shattered Glass",
+        text: "You kick the blockage. The glass shatters. The ocean rushes in instantly. You are swallowed by the cold.",
+        choices: [
+          { text: "Restart Log.", target: "start" }
+        ],
+        ending: true
+      },
+      flares: {
+        title: "The Spark",
+        text: "The flare creates enough heat to melt the ice. The light returns. The shadows on the wall retreat. You survive the night.",
+        choices: [
+          { text: "Keep watch.", target: "win" }
+        ],
+        ending: true
+      },
+      death_door: {
+        title: "Silence",
+        text: "You open the door. The fog doesn't rush in. It enters as a thought. You forget your name. You forget to be afraid. You become the lighthouse.",
+        choices: [
+          { text: "Wake up.", target: "start" }
+        ],
+        ending: true
+      },
+      death_water: {
+        title: "Drowned",
+        text: "Cold. Salt. Darkness. The 'parts' were hooks.",
+        choices: [
+          { text: "Restart Log.", target: "start" }
+        ],
+        ending: true
+      },
+      hide: {
+        title: "Under the Desk",
+        text: "The third bell rings. Something heavy hits the desk, shattering the wood above your head. It searches for you. After hours, it leaves.",
+        choices: [
+          { text: "Crawl out and fix the lamp.", target: "lamp" }
+        ]
+      },
+      win: {
+        title: "Morning",
+        text: "Sunrise. The ship passes safely. The ledger remains closed. You are still human.",
+        choices: [
+          { text: "New Game", target: "start" }
+        ],
+        ending: true
+      }
+    };
+
+    let currentSceneId = 'start';
+
+    function renderScene(id) {
+      playClick();
+      currentSceneId = id;
+      const scene = scenes[id];
+      
+      // Fade out
+      container.style.opacity = 0;
+      
+      setTimeout(() => {
+        container.innerHTML = `
+          <div class="scene-meta">LOG REF: ${id.toUpperCase()} // ${scene.ending ? 'TERMINAL' : 'ACTIVE'}</div>
+          <h1>${scene.title}</h1>
+          <div class="story-text">${scene.text}</div>
+          <div class="choices">
+            ${scene.choices.map(c => `<button class="choice-btn" onclick="renderScene('${c.target}')">${c.text}</button>`).join('')}
+          </div>
+        `;
+        container.style.opacity = 1;
+      }, 200);
+      
+      // Transition speed
+      container.style.transition = 'opacity 0.2s';
+    }
+
+    // Start
+    renderScene('start');
+
+    // Clock
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('clock').innerText = now.toLocaleTimeString();
+    }, 1000);
+
+  </script>
+</body>
+</html>

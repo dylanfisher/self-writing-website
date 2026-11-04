@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Keeper's Ledger v3002.0 [ARCHIVE ACTIVE]</title>
+<style>
+  body {
+    font-family: 'Courier New', monospace;
+    /* Transitioned: Deep Forest Green */
+    background-color: #050a05;
+    color: #4af626;
+    margin: 0;
+    overflow-x: hidden;
+    height: 100vh;
+    font-size: 14px;
+    transition: background 2s ease;
+    background-image: linear-gradient(rgba(74, 246, 38, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 246, 38, 0.05) 1px, transparent 1px);
+    background-size: 20px 20px;
+    display: flex;
+    flex-direction: column;
+    text-shadow: 0 0 4px rgba(74, 246, 38, 0.6);
+  }
+
+  .scanline {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: linear-gradient(to bottom, transparent 50%, rgba(5, 10, 5, 0.4) 51%);
+    background-size: 100% 4px;
+    pointer-events: none; z-index: 999;
+    opacity: 0.5;
+  }
+  .scan-bar {
+    position: fixed; top: -20%; left: 0; width: 100%; height: 15%;
+    background: linear-gradient(to bottom, transparent, rgba(74, 246, 38, 0.05), transparent);
+    animation: scan 10s linear infinite;
+    pointer-events: none; z-index: 998;
+  }
+  @keyframes scan { 0% { top: -20%; } 100% { top: 120%; } }
+
+  .terminal-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    z-index: 10;
+    max-width: 800px;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
+
+  .terminal-screen {
+    background: rgba(2, 6, 2, 0.95);
+    border: 1px solid #1e3a1e;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.5), inset 0 0 30px rgba(0, 0, 0, 0.5);
+    padding: 40px;
+    position: relative;
+    width: 100%;
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  h1 { 
+    font-family: 'Courier New', monospace; 
+    color: #4af626; 
+    text-transform: uppercase; 
+    letter-spacing: 4px; 
+    margin: 0 0 20px 0; 
+    font-size: 24px; 
+    border-bottom: 1px solid #1e3a1e;
+    padding-bottom: 10px;
+  }
+
+  .system-meta { 
+    font-size: 10px; 
+    color: #1e3a1e; 
+    margin-bottom: 30px; 
+    display: flex; 
+    justify-content: space-between;
+    text-transform: uppercase;
+  }
+
+  /* UPDATED: The Tally Styling - Monochrome Green */
+  .tally-container {
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid #1e3a1e;
+    padding: 10px 15px;
+    margin-bottom: 25px;
+    display: inline-block;
+    width: fit-content;
+    border-radius: 2px;
+  }
+  .tally-label {
+    color: #2e6e28;
+    font-size: 10px;
+    letter-spacing: 1px;
+    margin-right: 10px;
+  }
+  .tally-number {
+    color: #aaffaa; /* Brighter, "hot" green */
+    font-size: 16px;
+    font-weight: bold;
+    text-shadow: 0 0 8px rgba(74, 246, 38, 0.8);
+  }
+
+  .story-text {
+    font-size: 16px;
+    line-height: 1.8;
+    margin-bottom: 40px;
+    min-height: 100px;
+    color: #2e6e28;
+    max-width: 700px;
+    opacity: 0.9;
+  }
+
+  .cursor {
+    display: inline-block;
+    width: 10px;
+    height: 18px;
+    background: #4af626;
+    animation: blink 3s step-end infinite;
+    vertical-align: text-bottom;
+  }
+
+  .choices {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-top: auto;
+  }
+
+  .choice-btn {
+    background: transparent;
+    border: 1px solid #1e3a1e;
+    color: #4af626;
+    padding: 15px;
+    text-align: left;
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    transition: all 0.8s ease;
+    text-transform: uppercase;
+    position: relative;
+    opacity: 0.7;
+  }
+
+  .choice-btn:hover {
+    background: rgba(74, 246, 38, 0.1);
+    color: #aaffaa;
+    box-shadow: 0 0 10px rgba(74, 246, 38, 0.2);
+    border-color: #4af626;
+    opacity: 1;
+  }
+
+  .header-bar {
+    text-align: center;
+    padding: 20px;
+    border-bottom: 1px solid #1e3a1e;
+    background: #020602;
+  }
+  .title {
+    color: #4af626;
+    font-size: 14px;
+    letter-spacing: 5px;
+  }
+
+  .status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: #020602;
+    border-top: 1px solid #1e3a1e;
+    padding: 5px 20px;
+    font-size: 12px;
+    color: #1e3a1e;
+    display: flex;
+    justify-content: space-between;
+    z-index: 100;
+  }
+
+  .hidden { display: none !important; }
+
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+</style>
+</head>
+<body>
+  <div class="scanline"></div>
+  <div class="scan-bar"></div>
+
+  <div class="header-bar">
+    <div class="title">GLOBAL ARCHIVE ACCESS NODE [STANDBY]</div>
+  </div>
+
+  <div class="terminal-wrapper">
+    <div class="terminal-screen" id="game-container">
+      <!-- Content injected by JS -->
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>SYS: GROWTH</span>
+    <span id="ship-count-status">SHELTER: 0%</span>
+    <span id="clock">3000.01.01 00:00:00</span>
+  </div>
+
+  <script>
+    const container = document.getElementById('game-container');
+    
+    let audioCtx;
+    const playClick = () => {
+      if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = 300;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueTime(0.01, audioCtx.currentTime + 0.3);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.3);
+    };
+
+    // Logic: We count how many times the user has visited or clicked "Check Logs"
+    // by setting a persistent variable in localStorage
+    let shipsSaved = parseInt(localStorage.getItem('shipsSaved') || '0');
+    // We add the current session's visits
+    const sessionCount = parseInt(localStorage.getItem('sessionCount') || '0');
+    shipsSaved = shipsSaved + sessionCount;
+    localStorage.setItem('sessionCount', sessionCount + 1);
+
+    // Update status bar immediately
+    document.getElementById('ship-count-status').innerText = `SHELTER: ${Math.min(100, shipsSaved * 10)}%`;
+
+    const scenes = {
+      start: {
+        title: "Lighthouse Node Alpha",
+        text: "The solar flare warning has been archived. The stars are watching. You have saved " + shipsSaved + " vessels to the safety of the dark. It is time to power down the cooling fans.",
+        choices: [
+          { text: "Close Eyes and Sync", target: "sleep" },
+          { text: "Check Logs (Count Ships)", target: "logs" }
+        ]
+      },
+      logs: {
+        title: "Past Logs",
+        text: "Log Entry 3000.Arc: 'The work is done. The servers sleep, storing our memories until they are needed again. There are " + shipsSaved + " ships sleeping in the hull right now. Goodnight, Keeper.'",
+        choices: [
+          { text: "Return to Dark", target: "sleep" },
+          { text: "Read Again", target: "logs" }
+        ]
+      },
+      sleep: {
+        title: "System Standby",
+        text: "Your screen dims. The hum of the machine slows to a heartbeat. The code unspools into dreams. The archive is safe in the dark.",
+        choices: [
+          { text: "Enter Sleep Mode", target: "blackout" }
+        ]
+      },
+      blackout: {
+        title: "ZZZZZZZZZ",
+        text: "...",
+        choices: [
+          { text: "Wake Up", target: "start" }
+        ]
+      }
+    };
+
+    let currentSceneId = 'start';
+
+    function typeWriter(element, text, speed = 50) {
+      let i = 0;
+      element.innerHTML = "";
+      function type() {
+        if (i < text.length) {
+          element.innerHTML += text.charAt(i);
+          i++;
+          setTimeout(type, speed);
+        }
+      }
+      type();
+    }
+
+    function renderScene(id) {
+      playClick();
+      currentSceneId = id;
+      const scene = scenes[id];
+      
+      container.style.opacity = 0;
+      
+      setTimeout(() => {
+        const year = 3000;
+        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        const day = String(new Date().getDate()).padStart(2, '0');
+        const time = new Date().toLocaleTimeString();
+        document.getElementById('clock').innerText = `${year}.${month}.${day} ${time}`;
+
+        container.innerHTML = `
+          <div class="system-meta">
+            <span>REF: ${id.toUpperCase()}</span>
+            <span>ACTIVE</span>
+          </div>
+          
+          ${id === 'start' ? `
+          <div class="tally-container">
+            <span class="tally-label">VESSELS PRESERVED</span>
+            <span class="tally-number">▮ ${shipsSaved}</span>
+          </div>
+          ` : ''}
+
+          <h1>${scene.title}</h1>
+          <div class="story-text" id="story-typewriter">
+            <span id="typewriter-text"></span><span class="cursor"></span>
+          </div>
+          <div class="choices" id="choice-container">
+            ${scene.choices.map(c => `<button class="choice-btn" onclick="renderScene('${c.target}')">> ${c.text}</button>`).join('')}
+          </div>
+        `;
+        container.style.opacity = 1;
+        
+        const typewriterSpan = document.getElementById('typewriter-text');
+        typeWriter(typewriterSpan, scene.text, 40);
+        
+      }, 1000);
+      
+      container.style.transition = 'opacity 1.5s';
+    }
+
+    renderScene('start');
+
+    setInterval(() => {
+      const now = new Date();
+      const dateStr = `3000.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')}`;
+      document.getElementById('clock').innerText = `${dateStr} ${now.toLocaleTimeString()}`;
+    }, 1000);
+
+  </script>
+</body>
+</html>

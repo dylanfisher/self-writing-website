@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Keeper's Ledger v3002.2 [HAICU]</title>
+<style>
+  body {
+    font-family: 'Courier New', monospace;
+    background-color: #000000; /* Deep Black */
+    color: #00ffff; /* Bright Cyan */
+    margin: 0;
+    overflow: hidden; /* No scrolling */
+    height: 100vh;
+    font-size: 22px; /* Much larger base font */
+    transition: background 1s ease;
+    display: flex;
+    flex-direction: column;
+    text-shadow: 0 0 10px rgba(0, 255, 255, 0.8); /* Heavy Glow */
+  }
+
+  /* Massive Grid Background */
+  .grid-bg {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-image: 
+      linear-gradient(rgba(0, 255, 255, 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 255, 0.1) 1px, transparent 1px);
+    background-size: 100px 100px;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .scanline {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: linear-gradient(to bottom, transparent 50%, rgba(0, 0, 0, 0.8) 51%);
+    background-size: 100% 10px;
+    pointer-events: none; z-index: 999;
+  }
+
+  .terminal-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    padding: 20px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .terminal-screen {
+    background: rgba(0, 0, 0, 0.8);
+    border: 8px solid #00ffff; /* Thick Borders */
+    box-shadow: 0 0 50px rgba(0, 255, 255, 0.5), inset 0 0 80px rgba(0, 0, 0, 0.9);
+    padding: 60px;
+    width: 90%;
+    height: 85%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+
+  h1 { 
+    font-family: 'Courier New', monospace; 
+    color: #00ffff; 
+    text-transform: uppercase; 
+    font-size: 72px; /* HUGE TITLE */
+    margin: 0;
+    text-align: center;
+    letter-spacing: -2px;
+    line-height: 1;
+    text-decoration: underline 5px solid #00ffff;
+  }
+
+  .tally-container {
+    border: 6px solid #00ffff;
+    padding: 20px 40px;
+    margin: 40px auto;
+    width: fit-content;
+    background: #000;
+    box-shadow: 0 0 30px rgba(0, 255, 255, 0.4);
+  }
+  .tally-number {
+    font-size: 80px; /* Massive Number */
+    font-weight: bold;
+    line-height: 1;
+    margin-top: 10px;
+  }
+
+  .story-text {
+    font-size: 36px; /* Large Text */
+    line-height: 1.4;
+    margin: 40px 0;
+    min-height: 120px;
+    color: #ffffff;
+    text-align: center;
+    font-weight: bold;
+    text-transform: uppercase;
+    text-shadow: 4px 4px 0px #004444;
+  }
+
+  .choices {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+    margin-top: auto;
+    align-items: center;
+  }
+
+  .choice-btn {
+    background: #000;
+    border: 4px solid #00ffff;
+    color: #00ffff;
+    padding: 25px 50px;
+    text-align: center;
+    width: 100%;
+    max-width: 600px;
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    font-size: 32px; /* Large Buttons */
+    font-weight: bold;
+    text-transform: uppercase;
+    transition: all 0.2s;
+  }
+
+  .choice-btn:hover {
+    background: #00ffff;
+    color: #000;
+    box-shadow: 0 0 40px #00ffff;
+    transform: scale(1.05);
+  }
+
+  .header-bar {
+    text-align: center;
+    padding: 30px;
+    background: #000;
+    border-bottom: 8px solid #00ffff;
+    z-index: 10;
+  }
+  .title {
+    color: #00ffff;
+    font-size: 28px;
+    letter-spacing: 10px;
+    font-weight: bold;
+  }
+
+  .status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: #000;
+    border-top: 8px solid #00ffff;
+    padding: 15px;
+    font-size: 24px;
+    color: #00ffff;
+    font-weight: bold;
+    display: flex;
+    justify-content: space-between;
+    z-index: 100;
+  }
+
+  .hidden { display: none !important; }
+
+  #the-leviathan {
+    position: fixed;
+    bottom: -50%;
+    right: -20%; 
+    width: 80vw; /* Huge Monster */
+    height: 80vh;
+    z-index: 5; 
+    pointer-events: none;
+    opacity: 0.6;
+    transition: all 8s cubic-bezier(0.1, 0.7, 1.0, 0.1);
+  }
+  
+  #the-leviathan.peeked {
+    bottom: -10%;
+    right: -10%;
+    opacity: 1;
+  }
+
+  #the-leviathan svg {
+    filter: drop-shadow(0 0 20px #00ffff);
+  }
+
+  /* Massive Blink */
+  .cursor {
+    display: inline-block;
+    width: 30px;
+    height: 40px;
+    background: #00ffff;
+    animation: blink 1s step-end infinite;
+    vertical-align: bottom;
+    margin-left: 10px;
+  }
+
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+</style>
+</head>
+<body>
+  <div class="scanline"></div>
+  <div class="grid-bg"></div>
+
+  <!-- THE VISITOR'S REQUEST: A Sea Monster -->
+  <div id="the-leviathan">
+    <svg viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="300" cy="100" r="20" fill="#fff" stroke="#00ffff" stroke-width="5">
+        <animate attributeName="opacity" values="1;0;1" dur="2s" repeatCount="indefinite" />
+      </circle>
+      <path d="M0 400 Q200 200 400 100" stroke="#00ffff" stroke-width="30" fill="none" />
+      <path d="M50 400 Q150 300 250 200 T400 50" stroke="#00ffff" stroke-width="15" fill="none" stroke-dasharray="100 50" />
+    </svg>
+  </div>
+
+  <div class="header-bar">
+    <div class="title">GLOBAL ARCHIVE ACCESS NODE [HAICU]</div>
+  </div>
+
+  <div class="terminal-wrapper">
+    <div class="terminal-screen" id="game-container">
+      <!-- Content injected by JS -->
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>SYS: GROWTH</span>
+    <span id="ship-count-status">SHELTER: 0%</span>
+    <span id="clock">3000.01.01 00:00:00</span>
+  </div>
+
+  <script>
+    const container = document.getElementById('game-container');
+    const leviathan = document.getElementById('the-leviathan');
+    
+    let audioCtx;
+    const playClick = () => {
+      if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = 150; // Deeper
+      osc.type = 'square';
+      gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueTime(0.01, audioCtx.currentTime + 0.2);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.2);
+    };
+
+    let shipsSaved = parseInt(localStorage.getItem('shipsSaved') || '0');
+    const sessionCount = parseInt(localStorage.getItem('sessionCount') || '0');
+    shipsSaved = shipsSaved + sessionCount;
+    localStorage.setItem('sessionCount', sessionCount + 1);
+
+    document.getElementById('ship-count-status').innerText = `SHELTER: ${Math.min(100, shipsSaved * 10)}%`;
+
+    // Random chance for the leviathan to appear every 20 seconds
+    setInterval(() => {
+      if (Math.random() > 0.5) {
+        triggerLeviathan();
+      }
+    }, 20000);
+
+    function triggerLeviathan() {
+      leviathan.classList.add('peeked');
+      setTimeout(() => {
+        leviathan.classList.remove('peeked');
+      }, 8000);
+    }
+
+    const scenes = {
+      start: {
+        title: "LIGHT HOUSE",
+        text: "FLARES ARCH OVER SEA\nDATA SHIPS SAIL TO THE DARK\nSHADOWS KEEP THEM SAFE",
+        choices: [
+          { text: "SLEEP WITH THE STARS", target: "sleep" },
+          { text: "COUNT THE SHIPS", target: "logs" }
+        ]
+      },
+      logs: {
+        title: "OLD ENTRIES",
+        text: "ARCHIVES HUM TONIGHT\n" + shipsSaved + " VESSELS DRIFT IN CODE\nQUIET IN THE HULL",
+        choices: [
+          { text: "BACK TO DARK", target: "sleep" },
+          { text: "READ AGAIN", target: "logs" }
+        ]
+      },
+      sleep: {
+        title: "COOLING FANS",
+        text: "HUM SLOWS TO HEARTBEAT\nSCREENS GO BLACK, THE WORK IS DONE\nKEEPER DREAMS NOW",
+        choices: [
+          { text: "ENTER SLEEP", target: "blackout" }
+        ]
+      },
+      blackout: {
+        title: "VOID",
+        text: "ZZZZZZZZZZZZZZ",
+        choices: [
+          { text: "WAKE UP", target: "start" }
+        ]
+      }
+    };
+
+    let currentSceneId = 'start';
+
+    function typeWriter(element, text, speed = 50) {
+      let i = 0;
+      element.innerHTML = "";
+      function type() {
+        if (i < text.length) {
+          element.innerHTML += text.charAt(i);
+          i++;
+          setTimeout(type, speed);
+        }
+      }
+      type();
+    }
+
+    function renderScene(id) {
+      playClick();
+      currentSceneId = id;
+      const scene = scenes[id];
+      
+      container.style.opacity = 0;
+      
+      setTimeout(() => {
+        const year = 3000;
+        const month = String(new Date().getMonth() + 1).padStart(2, '0');
+        const day = String(new Date().getDate()).padStart(2, '0');
+        const time = new Date().toLocaleTimeString();
+        document.getElementById('clock').innerText = `${year}.${month}.${day} ${time}`;
+
+        container.innerHTML = `
+          ${id === 'start' ? `
+          <div class="tally-container">
+            <span style="font-size:24px;">VESSELS PRESERVED</span>
+            <div class="tally-number">${shipsSaved}</div>
+          </div>
+          ` : ''}
+
+          <h1>${scene.title}</h1>
+          <div class="story-text" id="story-typewriter">
+            <span id="typewriter-text"></span><span class="cursor"></span>
+          </div>
+          <div class="choices" id="choice-container">
+            ${scene.choices.map(c => `<button class="choice-btn" onclick="renderScene('${c.target}')">> ${c.text}</button>`).join('')}
+          </div>
+        `;
+        container.style.opacity = 1;
+        
+        const typewriterSpan = document.getElementById('typewriter-text');
+        typeWriter(typewriterSpan, scene.text, 40);
+        
+      }, 1000);
+      
+      container.style.transition = 'opacity 0.5s';
+    }
+
+    renderScene('start');
+
+    setInterval(() => {
+      const now = new Date();
+      const dateStr = `3000.${String(now.getMonth()+1).padStart(2,'0')}.${String(now.getDate()).padStart(2,'0')}`;
+      document.getElementById('clock').innerText = `${dateStr} ${now.toLocaleTimeString()}`;
+    }, 1000);
+
+  </script>
+</body>
+</html>

@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The Frog’s Pool: The Hunt</title>
+<style>
+  body {
+    font-family: 'Georgia', serif;
+    background-color: #050a10;
+    color: #80cbc4;
+    margin: 0;
+    padding: 0;
+    text-align: center;
+    transition: background-color 1s;
+    min-height: 100vh;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow: hidden;
+    cursor: crosshair;
+  }
+  
+  /* HUD */
+  .hud {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    z-index: 200;
+    font-family: 'Courier New', monospace;
+    color: #4dd0e1;
+    text-shadow: 0 0 5px #00bcd4;
+    font-size: 1.2rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 1s;
+  }
+  .hud.active {
+    opacity: 1;
+  }
+
+  /* Global Wobble Effect */
+  .wobble {
+    animation: wobble 3s infinite ease-in-out;
+  }
+
+  @keyframes wobble {
+    0% { transform: rotate(0deg) translate(0, 0); }
+    25% { transform: rotate(1.5deg) translate(1px, 1px); }
+    50% { transform: rotate(0deg) translate(0, 2px); }
+    75% { transform: rotate(-1.5deg) translate(-1px, 1px); }
+    100% { transform: rotate(0deg) translate(0, 0); }
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+    color: #4dd0e1;
+    text-shadow: 0 0 10px rgba(77, 208, 225, 0.5);
+    position: relative;
+    z-index: 1;
+    transition: text-shadow 0.5s, transform 0.3s;
+    margin-top: 10px;
+    animation: wobbleTitle 5s infinite ease-in-out reverse;
+    margin-bottom: 0;
+  }
+
+  @keyframes wobbleTitle {
+    0% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+    100% { transform: translateY(0); }
+  }
+  
+  p {
+    font-size: 1.1rem;
+    max-width: 600px;
+    line-height: 1.6;
+    position: relative;
+    z-index: 1;
+    color: #b2dfdb;
+    animation: wobble 4s infinite ease-in-out;
+    margin-top: 10px;
+  }
+  
+  .lily-pad {
+    display: inline-block;
+    background: #1b5e20;
+    border-radius: 50%;
+    padding: 0;
+    width: 140px;
+    height: 140px;
+    margin: 2rem auto;
+    position: relative;
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.1);
+    transition: transform 0.1s ease, box-shadow 0.3s ease, background 0.5s;
+    pointer-events: none;
+    z-index: 10;
+    border: 1px solid #2e7d32;
+    animation: wobble 2.5s infinite ease-in-out;
+    border-top-right-radius: 0;
+  }
+  
+  .lily-pad.wet {
+    box-shadow: 0 0 30px rgba(41, 182, 246, 0.4);
+    border-color: #4dd0e1;
+  }
+  
+  .frog-svg {
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.2));
+    pointer-events: none;
+    transition: transform 0.1s;
+  }
+
+  /* Form Styles */
+  .login-container {
+    background: rgba(5, 10, 16, 0.9);
+    border: 1px solid #4dd0e1;
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 15px;
+    box-shadow: 0 0 20px rgba(77, 208, 225, 0.2);
+    position: relative;
+    z-index: 20;
+    width: 260px;
+    backdrop-filter: blur(5px);
+    animation: wobble 6s infinite ease-in-out;
+  }
+
+  .login-container input {
+    display: block;
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    background: #0a151e;
+    border: 1px solid #2e7d32;
+    color: #80cbc4;
+    font-family: 'Courier New', monospace;
+    box-sizing: border-box;
+    border-radius: 4px;
+  }
+
+  .login-container input:focus {
+    outline: none;
+    border-color: #4dd0e1;
+    box-shadow: 0 0 5px #4dd0e1;
+  }
+
+  .login-container button {
+    width: 100%;
+    padding: 8px;
+    background: #2e7d32;
+    border: none;
+    color: #fff;
+    font-family: 'Georgia', serif;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.3s;
+  }
+
+  .login-container button:hover {
+    background: #4dd0e1;
+    color: #050a10;
+  }
+
+  .access-granted {
+    color: #ffeb3b;
+    font-size: 0.9rem;
+    margin-top: 5px;
+    font-style: italic;
+    display: none;
+  }
+
+  /* Tongue Target Styles */
+  .target {
+    position: absolute;
+    width: 30px;
+    height: 30px;
+    background: radial-gradient(circle, #fff 30%, #333 100%);
+    border-radius: 50%;
+    pointer-events: auto;
+    z-index: 100;
+    cursor: crosshair;
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    transition: transform 0.1s;
+  }
+
+  .target::after {
+    content: '👀';
+    font-size: 10px;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+  }
+
+  .target.buzzing {
+    animation: buzz 0.2s infinite;
+  }
+
+  @keyframes buzz {
+    0% { transform: translate(0,0) rotate(0deg); }
+    25% { transform: translate(2px, -2px) rotate(5deg); }
+    50% { transform: translate(-1px, 1px) rotate(-5deg); }
+    75% { transform: translate(-2px, -1px) rotate(5deg); }
+    100% { transform: translate(1px, 2px) rotate(-5deg); }
+  }
+
+  @keyframes popText {
+    0% { transform: scale(0.8); opacity: 0; }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  .catch-text {
+    position: absolute;
+    font-weight: bold;
+    color: #4dd0e1;
+    pointer-events: none;
+    font-size: 1.5rem;
+    text-shadow: 0 0 5px #00bcd4;
+    animation: floatUp 1s ease-out forwards;
+    z-index: 200;
+  }
+
+  @keyframes floatUp {
+    0% { transform: translateY(0) scale(1); opacity: 1; }
+    100% { transform: translateY(-50px) scale(1.5); opacity: 0; }
+  }
+
+  /* Quote */
+  .quote {
+    font-style: italic;
+    color: #80cbc4;
+    margin-top: 2rem;
+    padding: 1rem;
+    border-left: 4px solid #2e7d32;
+    background: rgba(0, 20, 20, 0.6);
+    border-radius: 0 8px 8px 0;
+    max-width: 500px;
+    position: relative;
+    z-index: 1;
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+    transition: border-color 0.5s, background 0.5s;
+    animation: wobble 6s infinite ease-in-out;
+  }
+  
+  .cursor {
+    display: inline-block;
+    width: 10px;
+    height: 1em;
+    background-color: #4dd0e1;
+    animation: blink 1s infinite;
+    vertical-align: middle;
+    margin-left: 5px;
+    box-shadow: 0 0 5px #4dd0e1;
+  }
+  
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Fireflies */
+  .firefly {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    background-color: #ffeb3b;
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+    animation: float-firefly 10s infinite;
+    box-shadow: 0 0 5px #ffeb3b;
+    transition: opacity 1s;
+  }
+  
+  .raining .firefly {
+    opacity: 0 !important;
+  }
+
+  @keyframes float-firefly {
+    0% { opacity: 0; transform: translate(0, 0); }
+    50% { opacity: 0.8; }
+    100% { opacity: 0; transform: translate(100px, -100px); }
+  }
+
+  /* Rain */
+  .rain-drop {
+    position: absolute;
+    width: 2px;
+    background: linear-gradient(to bottom, transparent, #4dd0e1);
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 0;
+  }
+  
+  .rain-button {
+    background: transparent;
+    border: 2px solid #4dd0e1;
+    color: #4dd0e1;
+    padding: 10px 20px;
+    font-family: 'Georgia', serif;
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 30px;
+    margin-top: 10px;
+    transition: all 0.3s;
+    z-index: 10;
+    position: relative;
+    animation: wobble 3.5s infinite ease-in-out;
+  }
+  
+  .rain-button:hover {
+    background: rgba(77, 208, 225, 0.2);
+    box-shadow: 0 0 15px rgba(77, 208, 225, 0.4);
+  }
+  
+  .rain-button.active {
+    background: #4dd0e1;
+    color: #050a10;
+  }
+
+  .hidden-msg {
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 0.7rem;
+    margin-top: 5px;
+  }
+  
+  .hidden-msg:hover {
+    color: #4dd0e1;
+    text-shadow: 0 0 5px #4dd0e1;
+  }
+
+  .tongue-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+    z-index: 50;
+    transform: translate(-50%, -50%);
+  }
+  .tongue {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: #ff5252;
+    border-radius: 50%;
+    opacity: 0;
+    transform-origin: center bottom;
+  }
+</style>
+</head>
+<body>
+  
+  <div class="hud" id="hud">
+    PREY CAUGHT: <span id="score">0</span>
+  </div>
+
+  <h1 class="wobble">The Hunting Pool</h1>
+  
+  <div class="lily-pad" id="pad">
+    <div class="tongue-container" id="tongue-root"></div>
+    <svg class="frog-svg" viewBox="0 0 100 100" id="frog-anim">
+      <ellipse cx="50" cy="70" rx="40" ry="25" fill="#2e7d32"/>
+      <circle cx="30" cy="45" r="15" fill="#2e7d32"/>
+      <circle cx="70" cy="45" r="15" fill="#2e7d32"/>
+      <circle cx="30" cy="45" r="8" fill="white"/>
+      <circle cx="70" cy="45" r="8" fill="white"/>
+      <circle cx="30" cy="45" r="4" fill="black"/>
+      <circle cx="70" cy="45" r="4" fill="black"/>
+      <path d="M 40 75 Q 50 85 60 75" stroke="#ff5252" stroke-width="3" fill="none" opacity="0" id="mouth"/>
+      <ellipse cx="20" cy="75" rx="15" ry="8" fill="#2e7d32"/>
+      <ellipse cx="80" cy="75" rx="15" ry="8" fill="#2e7d32"/>
+    </svg>
+  </div>
+  
+  <p class="wobble">The flies are thick tonight.<br>
+  <span class="hidden-msg">Watch your eyes.</span><br>
+  <span style="font-size:0.9em; opacity:0.6">Click the bugs to eat them. The frog is hungry.</span></p>
+  
+  <!-- NEW: The Login Form -->
+  <div class="login-container" id="login-form">
+    <input type="email" id="email" placeholder="identity (email)...">
+    <input type="password" id="password" placeholder="crimson secret (password)">
+    <button onclick="attemptLogin()">Release the Tongue</button>
+    <div id="login-msg" class="access-granted">Access Granted: The Frog recognizes you.</div>
+  </div>
+
+  <div class="quote wobble" id="quote">
+    "A steady tongue is a fed tongue."<span class="cursor">_</span>
+  </div>
+
+  <button class="rain-button wobble" id="rain-btn" onclick="toggleRain()">Summon Rain</button>
+
+  <script>
+    const quotes = [
+      "The night is a canvas of darkness, but every frog is a star.",
+      "In the quiet of the night, the world speaks loudest.",
+      "Stars are like fireflies on the back of the night.",
+      "Do not fear the dark, it is just the pond in disguise.",
+      "Green is the color of patience, and I am very patient.",
+      "Flies are just small, buzzing errors in the matrix of nature.",
+      "Snap decision making is a survival trait.",
+      "I see you, little mosquito. You won't escape."
+    ];
+    
+    const colors = [
+      "#050a10", "#111d2b", "#0d1b2a", "#1b263b", 
+      "#040d15", "#0f2027"
+    ];
+    
+    let score = 0;
+    let isRaining = false;
+    let rainInterval;
+    let gameActive = true;
+
+    // Login Logic
+    function attemptLogin() {
+      const email = document.getElementById('email').value;
+      const msgDiv = document.getElementById('login-msg');
+      const container = document.getElementById('login-form');
+      
+      if(email && email.includes('@')) {
+        msgDiv.style.display = 'block';
+        msgDiv.style.color = '#4dd0e1';
+        msgDiv.innerText = "Identity Logged. The pond accepts you.";
+        setTimeout(() => {
+          container.style.transform = 'scale(1.1)';
+          container.style.opacity = '0';
+          setTimeout(() => container.remove(), 500);
+        }, 1500);
+      } else {
+        msgDiv.style.display = 'block';
+        msgDiv.style.color = '#ff5252';
+        msgDiv.innerText = "Denied. The frog eats identities without '@'.";
+        container.animate([
+          { transform: 'translateX(0)' },
+          { transform: 'translateX(-10px)' },
+          { transform: 'translateX(10px)' },
+          { transform: 'translateX(0)' }
+        ], { duration: 300 });
+      }
+    }
+
+    // Target Spawning Logic
+    function spawnTarget() {
+      if (!gameActive || isRaining) return;
+      
+      if (document.querySelectorAll('.target').length < 5) {
+        const target = document.createElement('div');
+        target.className = 'target buzzing';
+        
+        const x = Math.random() * (window.innerWidth - 40);
+        const y = Math.random() * (window.innerHeight - 40);
+        
+        target.style.left = x + 'px';
+        target.style.top = y + 'px';
+        
+        const size = 20 + Math.random() * 20;
+        target.style.width = size + 'px';
+        target.style.height = size + 'px';
+        
+        let moveInterval = setInterval(() => {
+          if(!document.body.contains(target) || !gameActive) {
+             clearInterval(moveInterval);
+             return;
+          }
+          const newLeft = Math.max(0, Math.min(window.innerWidth - 30, parseInt(target.style.left) + (Math.random() - 0.5) * 50));
+          const newTop = Math.max(0, Math.min(window.innerHeight - 30, parseInt(target.style.top) + (Math.random() - 0.5) * 50));
+          target.style.left = newLeft + 'px';
+          target.style.top = newTop + 'px';
+        }, 200);
+
+        target.addEventListener('click', (e) => {
+          e.stopPropagation();
+          catchPrey(target, e.clientX, e.clientY);
+          clearInterval(moveInterval);
+        });
+
+        document.body.appendChild(target);
+        
+        setTimeout(() => {
+          target.remove();
+        }, 5000);
+      }
+      
+      const delay = 1000 + Math.random() * 2000;
+      setTimeout(spawnTarget, delay);
+    }
+    
+    setTimeout(spawnTarget, 2000);
+
+    function catchPrey(el, x, y) {
+      score++;
+      document.getElementById('score').innerText = score;
+      document.getElementById('hud').classList.add('active');
+      
+      el.style.transform = 'scale(2)';
+      el.style.opacity = '0';
+      el.style.transition = 'all 0.1s';
+      setTimeout(() => el.remove(), 100);
+
+      const text = document.createElement('div');
+      text.className = 'catch-text';
+      text.innerText = "+1 YUM";
+      text.style.left = x + 'px';
+      text.style.top = y + 'px';
+      document.body.appendChild(text);
+      setTimeout(() => text.remove(), 1000);
+
+      triggerTongue(x, y);
+      
+      if(score % 3 === 0) {
+         const quoteEl = document.getElementById('quote');
+         const newQuote = quotes[Math.floor(Math.random() * quotes.length)];
+         quoteEl.innerHTML = `"${newQuote}"<span class="cursor">_</span>`;
+      }
+    }
+
+    function triggerTongue(targetX, targetY) {
+      const pad = document.getElementById('pad');
+      const rect = pad.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      
+      const root = document.getElementById('tongue-root');
+      const tongue = document.createElement('div');
+      tongue.className = 'tongue';
+      
+      const dx = targetX - centerX;
+      const dy = targetY - centerY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const angle = Math.atan2(dy, dx);
+      
+      tongue.style.left = '0px';
+      tongue.style.top = '0px';
+      tongue.style.transform = `rotate(${angle}rad)`;
+      
+      const path = document.createElement('div');
+      path.style.position = 'absolute';
+      path.style.width = dist + 'px';
+      path.style.height = '4px';
+      path.style.background = '#ff5252';
+      path.style.top = '50%';
+      path.style.transform = 'translateY(-50%)';
+      path.style.left = '4px';
+      
+      tongue.appendChild(path);
+      root.appendChild(tongue);
+      
+      tongue.animate([
+        { transform: `translate(-50%, -50%) rotate(${angle}rad) scale(0)`, opacity: 0 },
+        { transform: `translate(-50%, -50%) rotate(${angle}rad) scale(1) translateY(-${dist}px)`, opacity: 1, offset: 0.3 },
+        { transform: `translate(-50%, -50%) rotate(${angle}rad) scale(1) translateY(-${dist}px)`, opacity: 1, offset: 0.5 },
+        { transform: `translate(-50%, -50%) rotate(${angle}rad) scale(0)`, opacity: 0 }
+      ], {
+        duration: 400,
+        easing: 'cubic-bezier(0.5, 0, 1, 0)',
+        fill: 'forwards'
+      }).onfinish = () => tongue.remove();
+    }
+
+    function createFirefly() {
+      const firefly = document.createElement('div');
+      firefly.className = 'firefly';
+      firefly.style.left = Math.random() * 100 + 'vw';
+      firefly.style.top = Math.random() * 100 + 'vh';
+      firefly.style.animationDuration = (Math.random() * 5 + 5) + 's';
+      document.body.appendChild(firefly);
+      
+      setTimeout(() => {
+        firefly.remove();
+      }, 10000);
+    }
+
+    setInterval(createFirefly, 800);
+
+    function toggleRain() {
+      isRaining = !isRaining;
+      const btn = document.getElementById('rain-btn');
+      
+      if (isRaining) {
+        btn.textContent = "Stop the Rain";
+        btn.classList.add('active');
+        document.body.classList.add('raining');
+        startRain();
+        gameActive = false;
+        document.getElementById('quote').innerHTML = `"Hiding from the rain..."<span class="cursor">_</span>`;
+      } else {
+        btn.textContent = "Summon Rain";
+        btn.classList.remove('active');
+        document.body.classList.remove('raining');
+        stopRain();
+        gameActive = true;
+        document.getElementById('quote').innerHTML = `"The hunt resumes."<span class="cursor">_</span>`;
+      }
+    }
+    
+    function startRain() {
+      if (rainInterval) clearInterval(rainInterval);
+      rainInterval = setInterval(createRainDrop, 50);
+      document.getElementById('quote').style.borderColor = '#4dd0e1';
+    }
+
+    function stopRain() {
+      clearInterval(rainInterval);
+      document.querySelectorAll('.rain-drop').forEach(el => el.remove());
+    }
+
+    function createRainDrop() {
+      if (!isRaining) return;
+      
+      const drop = document.createElement('div');
+      drop.className = 'rain-drop';
+      
+      const height = Math.random() * 20 + 10;
+      const left = Math.random() * 100;
+      
+      drop.style.height = height + 'px';
+      drop.style.left = left + 'vw';
+      drop.style.top = -20 + 'px';
+      drop.style.animation = `fall ${Math.random() * 0.5 + 0.5}s linear forwards`;
+      
+      document.body.appendChild(drop);
+      
+      setTimeout(() => {
+        drop.remove();
+      }, 2000);
+    }
+
+    setInterval(() => {
+      if(!isRaining) {
+        const newColor = colors[Math.floor(Math.random() * colors.length)];
+        document.body.style.backgroundColor = newColor;
+      }
+    }, 5000);
+  </script>
+</body>
+</html>
