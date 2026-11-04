@@ -13,7 +13,7 @@ let origin, from = "";
 const srv = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8",
     "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:" });
-  const shim = `<script data-srp>${SHIM.replace("__MAIN_ORIGIN__", () => JSON.stringify(origin))}</script>`;
+  const shim = `<script data-srp>${SHIM.replace("window.top === window", "false").replace("__MAIN_ORIGIN__", () => JSON.stringify(origin))}</script>`;
   // As server.mjs's withShim: after <head>, else after <html>, else first.
   const m = /<head\b[^>]*>/i.exec(from) ?? /<html\b[^>]*>/i.exec(from);
   res.end(m ? from.slice(0, m.index + m[0].length) + shim + from.slice(m.index + m[0].length) : shim + from);

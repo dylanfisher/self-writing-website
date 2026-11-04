@@ -8,7 +8,7 @@ const pages = new Map();
 let origin;
 const srv = http.createServer((req, res) => {
   const html = pages.get(new URL(req.url, "http://x").pathname) ?? "missing";
-  const shim = `<script data-srp>${SHIM.replace("__MAIN_ORIGIN__", () => JSON.stringify(origin))}</script>`;
+  const shim = `<script data-srp>${SHIM.replace("window.top === window", "false").replace("__MAIN_ORIGIN__", () => JSON.stringify(origin))}</script>`;
   res.writeHead(200, { "Content-Type": "text/html" });
   res.end(html.replace(/<head>/, `<head>${shim}`));
 });

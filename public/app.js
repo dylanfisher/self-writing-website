@@ -274,13 +274,22 @@ function renderChromeCursors() {
 // Live drafts: the frame patches itself from the draft on screen to the next one instead of reloading
 // (lib/shim.js). The HTML is model output: it's only ever handed to the sandboxed frame, never used here.
 let draftData = null;   // the latest "draft" event: { draft, prev, version, from, html }
+// The last few drafts' HTML by number. After the first draft the server leaves out `from` (it's draft `prev`,
+// which we got before); without it here, the draft is loaded by URL instead of patched.
+const draftHtml = new Map();
+function takeDraft(d) {
+  if (typeof d.from !== "string" && d.prev) d.from = draftHtml.get(d.prev);
+  draftHtml.set(d.draft, d.html);
+  for (const k of draftHtml.keys()) if (k <= d.draft - 4) draftHtml.delete(k);
+  draftData = d;
+}
 let morphTimer = null;
 function showDraft(n) {
   const src = sbx(`d/${n}`);
   if (src === shownSrc) return;
   const d = draftData?.draft === n ? draftData : null;
   const from = d && sbx(d.prev ? `d/${d.prev}` : `v/${d.version}`);
-  if (!d || !frameReady || shownSrc !== from) return setFrame(src);
+  if (!d || typeof d.from !== "string" || !frameReady || shownSrc !== from) return setFrame(src);
   clearTimeout(frameTimer);
   shownSrc = src;
   frameExact = false;
@@ -354,6 +363,13 @@ function renderStage() {
 }
 
 let historySig = "";
+// "5m ago" in each History row, updated in place (rebuilding 250 rows to change their times is wasteful).
+function renderHistoryTimes() {
+  for (const li of $("history").children) {
+    const v = versions.get(Number(li.dataset.id)), t = li.querySelector(".when");
+    if (v && t) t.textContent = ago(v.created_at);
+  }
+}
 function renderHistory(force = false) {
   $("history-count").textContent = S.total;
   // Polling re-sends the state every few seconds; only rebuild the list when it changed (or to refresh times).
@@ -525,9 +541,31 @@ function renderNow() {
     ...(p?.lore ? [h("li", { class: "lore" }, `Remembering: ${p.lore}`)] : []),
     ...steps.map((s, i) => h("li", { class: writing && i === steps.length - 1 ? "current" : "" }, s)));
   $("now-code").hidden = !showCode;
-  if (showCode) $("now-code").textContent = p?.tail || (p?.stage === "waking" ? "Waking the model up…" : "Waiting for the first lines…");   // text, never HTML
+  const tail = p && code.id === p.id ? code.text : "";
+  if (showCode) $("now-code").textContent = tail || (p?.stage === "waking" ? "Waking the model up…" : "Waiting for the first lines…");   // text, never HTML
   $("code-toggle").textContent = showCode ? "Hide code" : "Show code";
   tickElapsed();
+}
+
+// The model's reply so far (its last 2000 characters) for "Show code". Progress from a stream carries only what
+// was added (`add` at offset `at`); a full `tail` (ending at `end`) comes with a new reply (`reply` counts them),
+// in every state and when a stream opens. A piece that doesn't follow what we have waits for the next full one.
+let code = { id: null, reply: null, end: 0, text: "" };
+let codeAsked = 0;
+function takeCode(p) {
+  if (!p) return;
+  if (typeof p.tail === "string") {
+    // A state fetched while the stream runs can be older than what the stream already gave us: keep ours.
+    if (p.id === code.id && p.reply !== undefined && (p.reply < code.reply || (p.reply === code.reply && p.end < code.end))) return;
+    code = { id: p.id, reply: p.reply, end: p.end ?? p.tail.length, text: p.tail };
+    return;
+  }
+  if (typeof p.add !== "string") return;   // no new text (a stage change)
+  if (p.id === code.id && p.reply === code.reply && p.at <= code.end) {
+    const add = p.add.slice(code.end - p.at);
+    code.text = (code.text + add).slice(-2000);
+    code.end += add.length;
+  } else if (Date.now() - codeAsked > 5000) { codeAsked = Date.now(); refresh(); }
 }
 
 function tickElapsed() {
@@ -585,8 +623,8 @@ function renderViewers() {
   $("viewers").title = n === 1 ? "Just you" : `${n} people have this page open`;
 }
 
-// "?" and "i" boxes: click to open, click outside or Esc to close. One open at a time.
-const pops = [...document.querySelectorAll(".help")].map((w) => ({ btn: w.querySelector(".help-btn"), box: w.querySelector(".help-box") }));
+// The "AI-written" and "i" boxes: click to open, click outside or Esc to close. One open at a time.
+const pops = [...document.querySelectorAll(".help")].map((w) => ({ btn: w.querySelector(".help-btn, .warn"), box: w.querySelector(".help-box") }));
 function setHelp(open, which = null) {
   for (const p of pops) {
     const on = open && p === which;
@@ -821,7 +859,12 @@ function applyState(next) {
   S = next;
   if (build === null) build = S.build ?? null;
   else if (S.build && S.build !== build) { build = S.build; reloadForUpdate(); }
-  for (const v of S.history) versions.set(v.id, v);
+  for (const v of S.history) {
+    // A row can change after it's written (scripts/check-versions.mjs marks broken ones): rebuild the list then.
+    const old = versions.get(v.id);
+    if (old && (old.broken !== v.broken || old.suggestion !== v.suggestion || old.summary !== v.summary)) historySig = "";
+    versions.set(v.id, v);
+  }
   const pageOldest = S.history[0]?.id ?? S.first;
   if (listOldest === null || pageOldest < listOldest) listOldest = pageOldest;
   if (first) {
@@ -854,10 +897,19 @@ async function poll() {
 }
 async function refresh() {
   try {
-    const r = await fetch("/api/state");
+    // Once we have the history, only the newest few versions (they're merged in, like broadcasts). The full state
+    // again when that leaves a gap (a tab that slept through many versions) or the database was reset.
+    const had = S;
+    let r = await fetch(had ? "/api/state?recent=1" : "/api/state");
     if (!r.ok) return;
-    const data = await r.json();
+    let data = await r.json();
+    if (had && (data.dbId !== had.dbId || (data.history[0]?.id ?? 0) > had.current + 1)) {
+      r = await fetch("/api/state");
+      if (!r.ok) return;
+      data = await r.json();
+    }
     progress = data.progress ?? null;
+    takeCode(progress);
     delete data.progress;
     applyState(data);
   } catch {}
@@ -868,7 +920,7 @@ async function refresh() {
 let es = null, lastEvent = 0;
 function connect() {
   es?.close();
-  es = new EventSource("/api/events");
+  es = new EventSource("/api/events?delta=1");   // delta: we take incremental progress and drafts
   const alive = () => { lastEvent = Date.now(); streamWorks = true; };
   es.addEventListener("ping", alive);
   es.addEventListener("hello", (e) => { alive(); me = JSON.parse(e.data); cursorKey = null; cursorsData = null; syncCursorKey(); });
@@ -876,11 +928,12 @@ function connect() {
   es.addEventListener("chrome-cursors", (e) => { alive(); chromeData = JSON.parse(e.data); renderChromeCursors(); });
   es.addEventListener("state", (e) => { alive(); applyState(JSON.parse(e.data)); });
   es.addEventListener("viewers", (e) => { alive(); if (S) { S.viewers = JSON.parse(e.data).viewers; renderViewers(); sendSite(); } });
-  es.addEventListener("draft", (e) => { alive(); draftData = JSON.parse(e.data); });
+  es.addEventListener("draft", (e) => { alive(); takeDraft(JSON.parse(e.data)); });
   es.addEventListener("progress", (e) => {
     alive();
     const before = progress?.draft;
     progress = JSON.parse(e.data);
+    takeCode(progress);
     if (!S) return;
     renderNow();
     if (progress.draft !== before) { renderStage(); sendSite(); }
@@ -908,8 +961,8 @@ adminFromHash();
 // nothing jumps when the stream's first state arrives.
 try {
   const boot = JSON.parse($("boot")?.textContent || "null");
-  if (boot) { progress = boot.progress ?? null; delete boot.progress; applyState(boot); }
+  if (boot) { progress = boot.progress ?? null; takeCode(progress); delete boot.progress; applyState(boot); }
 } catch {}
 connect();
 setInterval(tickElapsed, 1000);
-setInterval(() => { if (S) { renderHistory(true); renderStage(); renderQueue(); renderRules(); renderLore(); renderMine(); } }, 15_000);
+setInterval(() => { if (S) { renderHistoryTimes(); renderStage(); renderQueue(); renderRules(); renderLore(); renderMine(); } }, 15_000);

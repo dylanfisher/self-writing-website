@@ -94,6 +94,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS suggestions_status ON suggestions(status, id);
   CREATE INDEX IF NOT EXISTS suggestions_ip ON suggestions(ip_hash, created_at);
+  -- For recentOutcomes (every state): reads the newest few instead of sorting every finished suggestion.
+  CREATE INDEX IF NOT EXISTS suggestions_finished ON suggestions(finished_at);
 `);
 // JavaScript errors the browser check saw in this version (JSON array), shown as a warning in History.
 if (!db.prepare("SELECT 1 FROM pragma_table_info('versions') WHERE name = 'errors'").get()) {
@@ -183,10 +185,13 @@ const q = {
     FROM versions v LEFT JOIN suggestions s ON s.id = v.suggestion_id WHERE v.id < ? ORDER BY v.id DESC LIMIT ?`),
   bounds: db.prepare("SELECT MIN(id) AS first, MAX(id) AS last, COUNT(*) AS total FROM versions"),
   queued: db.prepare("SELECT id, text, created_at FROM suggestions WHERE status = 'queued' ORDER BY id"),
+  queuedCount: db.prepare("SELECT COUNT(*) AS n FROM suggestions WHERE status = 'queued'"),
   running: db.prepare("SELECT id, text, started_at FROM suggestions WHERE status = 'running' LIMIT 1"),
+  // "+status": keeps SQLite off the status index, which would sort every finished suggestion; this walks
+  // suggestions_finished from the newest and stops after 5.
   recentOutcomes: db.prepare(`
     SELECT id, text, status, error, version_id, finished_at FROM suggestions
-    WHERE status IN ('done','rejected','failed') ORDER BY finished_at DESC LIMIT 5`),
+    WHERE +status IN ('done','rejected','failed') ORDER BY finished_at DESC LIMIT 5`),
   insertSuggestion: db.prepare("INSERT INTO suggestions (text, ip_hash, status, created_at) VALUES (?, ?, 'queued', ?)"),
   // A visitor's most recent suggestions inside the window, newest first.
   recentFromIp: db.prepare("SELECT created_at FROM suggestions WHERE ip_hash = ? AND status != 'removed' AND created_at > ? ORDER BY created_at DESC LIMIT ?"),
@@ -228,7 +233,7 @@ const q = {
 // ---------- live state + server-sent events ----------
 const clients = new Set();
 const streamsByIp = new Map(); // ip hash → open event streams
-let progress = null; // { id, chars, expected, tail } while generating
+let progress = null; // { id, chars, expected, tail, end, reply, … } while generating (see onText in work())
 // People here now: visitors (by IP) with an open event stream, plus those polling /api/state in the last 10 s.
 const pollers = new Map(); // ip hash → last poll time
 function viewers() {
@@ -279,15 +284,35 @@ function state(historyLimit = HISTORY_PAGE) {
     drafted,
   };
 }
-function send(res, event, data) { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
-function broadcast(event, data) { for (const c of clients) send(c, event, data); }
+// A client that never reads would make Node buffer every broadcast (a draft is ~50 KB) forever, so cut it off;
+// its EventSource reconnects. destroy() fires the request's "close", which does the cleanup.
+const STREAM_BACKLOG_MAX = 2 * 1024 * 1024;
+const frame = (event, data) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+function write(res, f) {
+  if (res.writableLength > STREAM_BACKLOG_MAX) return res.destroy();
+  res.write(f);
+}
+const send = (res, event, data) => write(res, frame(event, data));
+// Serialized once, however many pages are open. `legacy`: what a page still running an app.js from before
+// incremental progress and drafts gets instead (its stream has no ?delta=1). Such a page reloads to the new
+// app.js within seconds (the build changes), so that frame is only built while one is still connected.
+function broadcast(event, data, legacy) {
+  let f = null, lf = null;
+  for (const c of clients) {
+    if (legacy && !c.delta) write(c, lf ??= frame(event, legacy));
+    else write(c, f ??= frame(event, data));
+  }
+}
 const broadcastState = () => broadcast("state", state(BROADCAST_HISTORY));
 // The site's own code (page, script, styles, and the shim in every sandbox page). Open pages reload when it changes
 // (see "build" in app.js). Files are read per request, so an edit to public/ is noticed here without a restart;
 // a restart sends it with the first state.
+// Cached: it's in every state, and hashing the ~15 KB shim each time adds up. Recomputed when a file's hash changes.
+let buildOf = { files: null, build: null };
 function build() {
-  return createHash("sha256").update(["index.html", "app.js", "app.css"].map((n) => staticFile(n).hash).join() + SHIM)
-    .digest("hex").slice(0, 12);
+  const files = ["index.html", "app.js", "app.css"].map((n) => staticFile(n).hash).join();
+  if (files !== buildOf.files) buildOf = { files, build: createHash("sha256").update(files + SHIM).digest("hex").slice(0, 12) };
+  return buildOf.build;
 }
 let lastBuild = null;
 setInterval(() => { const b = build(); if (lastBuild && b !== lastBuild) broadcastState(); lastBuild = b; }, 5_000).unref();
@@ -347,7 +372,8 @@ setInterval(() => {
     // Expired cursors change what's shown without a post.
     if (!dirtyKeys.has(k) && g.list.length === (cursorsShown.get(k) ?? 0)) continue;
     const list = g.list.sort((a, b) => b.at - a.at).slice(0, CURSORS_SHOWN).map((s) => ({ id: s.id, ...s.cur }));
-    for (const res of g.pages) send(res, "cursors", { k, list });
+    const f = frame("cursors", { k, list });
+    for (const res of g.pages) write(res, f);
     cursorsShown.set(k, g.list.length);
   }
   for (const k of cursorsShown.keys()) if (!byKey.has(k)) cursorsShown.delete(k);
@@ -355,7 +381,8 @@ setInterval(() => {
   const chrome = [...streams.values()].filter((s) => s.cur?.z && now - s.at < CURSOR_IDLE_MS);
   if (chromeDirty || chrome.length !== chromeShown) {
     const list = chrome.sort((a, b) => b.at - a.at).slice(0, CURSORS_SHOWN).map((s) => ({ id: s.id, ...s.cur }));
-    for (const s of streams.values()) send(s.res, "chrome-cursors", { list });
+    const f = frame("chrome-cursors", { list });
+    for (const s of streams.values()) write(s.res, f);
     chromeShown = chrome.length;
   }
   chromeDirty = false;
@@ -394,11 +421,14 @@ function updateDraft(text, base) {
   }
   html = scriptsLast(html);   // as finished pages are (see lib/scripts-last.mjs), so a draft matches its version
   if (!applied || html === base || Buffer.byteLength(html) > SIZE_CAP || sensitiveInput(html)) return false;
-  // Viewers patch their page from the one before (see lib/shim.js), so they get both. Sent as data only: the main
-  // origin passes it to the sandboxed frame and never puts it in its own page.
+  // Viewers patch their page from the one before (see lib/shim.js), so they need both. Sent as data only: the main
+  // origin passes it to the sandboxed frame and never puts it in its own page. After the first draft, `from` is
+  // the previous draft, which pages already got (one that didn't loads the draft's URL instead); only the first
+  // carries it (the version's HTML, which pages don't have).
   const prev = progress.draft;
-  broadcast("draft", { draft: draftSeq + 1, prev, version: draftVersion.id,
-    from: prev ? drafts.get(prev) : draftVersion.html, html });
+  const msg = { draft: draftSeq + 1, prev, version: draftVersion.id, html };
+  const from = prev ? drafts.get(prev) : draftVersion.html;
+  broadcast("draft", prev ? msg : { ...msg, from }, { ...msg, from });
   drafts.set(++draftSeq, html);
   for (const k of drafts.keys()) if (k <= draftSeq - 4) drafts.delete(k);
   progress.draft = draftSeq;
@@ -421,7 +451,7 @@ async function work() {
       const cur = q.latest.get();
       q.start.run(Date.now(), job.id);
       // Edits are short; ~1.5 KB is typical (the bar caps at 97% if a reply runs longer).
-      progress = { id: job.id, stage: "writing", chars: 0, expected: job.kind === "era" ? 4000 : 1500, tail: "", steps: [], rule: null, lore: null, draft: null, draftBlocks: 0 };
+      progress = { id: job.id, stage: "writing", chars: 0, expected: job.kind === "era" ? 4000 : 1500, tail: "", end: 0, reply: 0, steps: [], rule: null, lore: null, draft: null, draftBlocks: 0 };
       draftOf = { base: null, blocks: 0 };
       draftVersion = cur;
       const rules = q.activeRules.all();   // as numbered in this prompt; END RULE: n refers to rules[n - 1]
@@ -438,10 +468,26 @@ async function work() {
       if (await modelLoaded() === false) { progress.stage = "waking"; console.log(`#${job.id} waking the model`); }
       broadcastState();
       broadcast("progress", progress);
-      let lastSent = 0;
+      // The reply goes to pages as what was added since the last progress (`add`, starting at offset `at`), not
+      // the whole tail every 400 ms. A reply that doesn't continue the one sent (a new attempt) goes in full
+      // (`tail`, ending at `end`) with a new `reply` number. The stored progress always has the full tail: it's
+      // what new streams, /api/state and the boot state get.
+      let lastSent = 0, sentText = "", latest = "";
+      const sendProgress = (text) => {
+        const fresh = !text.startsWith(sentText);
+        // The tail is shown with textContent on the main origin: displayed as text, never parsed as HTML.
+        progress.tail = text.slice(-2000);
+        progress.end = text.length;
+        if (fresh) progress.reply++;
+        const at = sentText.length;
+        sentText = text;
+        if (fresh) return broadcast("progress", progress);
+        broadcast("progress", { ...progress, tail: undefined, at, add: text.slice(at) }, progress);
+      };
       const onText = (text, base) => {
         if (progress.stage === "waking") progress.stage = "writing";
         progress.chars = text.length;
+        latest = text;
         const newDraft = updateDraft(text, base);
         // A new status line is worth sending right away; plain progress is throttled.
         const steps = statusLines(text);
@@ -451,19 +497,19 @@ async function work() {
         progress.rule = rule;   // shown with textContent only
         progress.lore = lore;
         const now = Date.now();
-        if (newStep) { lastSent = now; progress.tail = text.slice(-2000); return broadcast("progress", progress); }
-        if (now - lastSent < 400) return;
+        if (!newStep && now - lastSent < 400) return;
         lastSent = now;
-        // The tail is shown with textContent on the main origin: displayed as text, never parsed as HTML.
-        progress.tail = text.slice(-2000);
-        broadcast("progress", progress);
+        sendProgress(text);
       };
       let r;
       try {
-        const onStage = (stage, info) => { if (info) console.log(`#${job.id} ${stage}: ${forLog(info)}`); progress.stage = stage; if (stage !== "testing") { progress.chars = 0; progress.steps = []; }
+        const onStage = (stage, info) => { if (info) console.log(`#${job.id} ${stage}: ${forLog(info)}`);
+          if (latest !== sentText) sendProgress(latest);   // the end of the reply, which the throttle may have held back
+          progress.stage = stage; if (stage !== "testing") { progress.chars = 0; progress.steps = []; }
           // Starting over from the current page: drop the draft. ("fixing" builds on the draft, so it stays.)
           if (stage === "retrying" || stage === "shrinking") { progress.draft = null; progress.draftBlocks = 0; }
-          broadcast("progress", progress); };
+          // The text is unchanged: no tail (pages keep theirs).
+          broadcast("progress", { ...progress, tail: undefined }, progress); };
         // rewrite() keeps to SUGGESTION_MS by itself. The watchdog is a backstop in case something hangs anyway:
         // it aborts the model call and stops waiting, so the line keeps moving.
         const ac = new AbortController();
@@ -482,7 +528,7 @@ async function work() {
       // The raw reply of every attempt when there was more than one (failed ones, then the accepted one), for working
       // out why the model went wrong. Never served.
       if (r.tries?.length) {
-        mkdirSync(join(DATA, "attempts"), { recursive: true });
+        mkdirSync(join(DATA, "attempts"), { recursive: true, mode: 0o700 });
         writeFileSync(join(DATA, "attempts", `${job.id}.txt`), `suggestion: ${job.text}\n` + r.tries.map((t) =>
           `\n===== attempt ${t.attempt}: ${t.error}\n${t.raw}`).join("\n"), { mode: 0o600 });
       }
@@ -723,7 +769,9 @@ function indexHtml() {
 
 // ---------- main origin ----------
 const main = http.createServer(async (req, res) => {
-  const url = new URL(req.url, "http://x");
+  // A request target like "//%zz" makes new URL throw; outside the try that would take the whole process down.
+  let url;
+  try { url = new URL(req.url, "http://x"); } catch { return json(res, 400, { error: "bad request" }); }
   const path = url.pathname;
   try {
     if ((req.method === "GET" || req.method === "HEAD") && STATIC[path]) {
@@ -737,6 +785,8 @@ const main = http.createServer(async (req, res) => {
         "Content-Security-Policy": MAIN_CSP,
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
+        // Turnstile is an iframe and needs no opener; allow-popups is kept in case its challenge ever opens one.
+        "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
         "Cache-Control": pinned ? "public, max-age=31536000, immutable" : "no-store",
       });
       return res.end(path === "/" ? indexHtml() : f.body);
@@ -745,7 +795,8 @@ const main = http.createServer(async (req, res) => {
     // Polling fallback for connections that buffer the event stream (e.g. Cloudflare quick tunnels).
     if (req.method === "GET" && path === "/api/state") {
       pollers.set(ipHash(clientIp(req)), Date.now());
-      return json(res, 200, { ...state(), progress });
+      // ?recent=1: a page that already has the history gets only the newest few, like a broadcast.
+      return json(res, 200, { ...state(url.searchParams.has("recent") ? BROADCAST_HISTORY : HISTORY_PAGE), progress });
     }
 
     // Older history, a page at a time: versions with id < before, oldest first.
@@ -767,6 +818,7 @@ const main = http.createServer(async (req, res) => {
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       });
+      res.delta = url.searchParams.has("delta");   // an app.js that takes incremental progress and drafts
       clients.add(res);
       const token = randomBytes(16).toString("hex");
       const cursor = { id: randomBytes(6).toString("hex"), res, k: null, cur: null, at: 0, posted: 0 };
@@ -813,7 +865,7 @@ const main = http.createServer(async (req, res) => {
           const mins = Math.round(RATE_LIMIT_SECONDS / 60);
           return json(res, 429, { error: `That's ${RATE_LIMIT_COUNT} suggestions in ${mins} minutes, the most for now.`, retryAfter: wait }, { "Retry-After": String(wait) });
         }
-        if (q.queued.all().length >= QUEUE_MAX) return json(res, 503, { error: "The line is full right now. Try again in a bit." });
+        if (q.queuedCount.get().n >= QUEUE_MAX) return json(res, 503, { error: "The line is full right now. Try again in a bit." });
         if (!(await turnstileOk(body.turnstile, clientIp(req)))) return json(res, 403, { error: "Couldn't verify you're human. Try again." });
       }
       const { lastInsertRowid } = q.insertSuggestion.run(text, h, Date.now());
@@ -900,43 +952,56 @@ const SANDBOX_CSP = [
 const SHIM = `<script data-srp>${readFileSync(join(ROOT, "lib", "shim.js"), "utf8")
   .replace("__MAIN_ORIGIN__", () => JSON.stringify(MAIN_ORIGIN))}</script>`;
 const SHIM_HASH = createHash("sha256").update(SHIM).digest("hex").slice(0, 8);
+// The shim goes first in the document (after a doctype, which must stay first for standards mode), so nothing
+// the model wrote can run before it, whatever it puts ahead of <head>.
 function withShim(html) {
-  const m = /<head\b[^>]*>/i.exec(html) ?? /<html\b[^>]*>/i.exec(html);
-  return m ? html.slice(0, m.index + m[0].length) + SHIM + html.slice(m.index + m[0].length) : SHIM + html;
+  const m = /^(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i.exec(html);
+  const at = m ? m[0].length : 0;
+  return html.slice(0, at) + SHIM + html.slice(at);
 }
 
+// Headers shared by every sandbox page, so /v/ and /d/ can't drift. The permissions policy turns off features
+// the page has no business using even if the sandbox attribute is ever loosened.
+const SANDBOX_PAGE_HEADERS = {
+  "Content-Type": "text/html; charset=utf-8",
+  "Content-Security-Policy": SANDBOX_CSP,
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Cross-Origin-Resource-Policy": "cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), display-capture=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), publickey-credentials-get=(), clipboard-read=()",
+  "X-DNS-Prefetch-Control": "off",
+};
+
 const sandbox = http.createServer((req, res) => {
-  const path = new URL(req.url, "http://x").pathname;
-  const get = req.method === "GET" || req.method === "HEAD";
-  // A live draft (see updateDraft): never cached, gone a few drafts later.
-  const d = get && /^\/d\/(\d{1,9})$/.exec(path);
-  if (d && drafts.has(Number(d[1]))) {
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": SANDBOX_CSP,
-      "X-Content-Type-Options": "nosniff",
-      "Referrer-Policy": "no-referrer",
-      "Cross-Origin-Resource-Policy": "cross-origin",
-      "Cache-Control": "no-store",
-    });
-    return res.end(withShim(drafts.get(Number(d[1]))));
-  }
-  const m = get && /^\/v\/(\d{1,9})$/.exec(path);
-  const v = m && q.versionHtml.get(Number(m[1]));
-  if (!v) {
-    res.writeHead(404, { "Content-Type": "text/plain", "Content-Security-Policy": "default-src 'none'" });
-    return res.end("not found");
-  }
-  res.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Content-Security-Policy": SANDBOX_CSP,
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    "Cross-Origin-Resource-Policy": "cross-origin",
+  // Nothing in here may throw: this handler is sync, so an exception would be uncaught and end the process.
+  try {
+    // A bad request target (e.g. "//%zz") makes new URL throw.
+    let path;
+    try { path = new URL(req.url, "http://x").pathname; } catch {
+      res.writeHead(400, { "Content-Type": "text/plain", "Content-Security-Policy": "default-src 'none'" });
+      return res.end("bad request");
+    }
+    const get = req.method === "GET" || req.method === "HEAD";
+    // A live draft (see updateDraft): never cached, gone a few drafts later.
+    const d = get && /^\/d\/(\d{1,9})$/.exec(path);
+    if (d && drafts.has(Number(d[1]))) {
+      res.writeHead(200, { ...SANDBOX_PAGE_HEADERS, "Cache-Control": "no-store" });
+      return res.end(withShim(drafts.get(Number(d[1]))));
+    }
+    const m = get && /^\/v\/(\d{1,9})$/.exec(path);
+    const v = m && q.versionHtml.get(Number(m[1]));
+    if (!v) {
+      res.writeHead(404, { "Content-Type": "text/plain", "Content-Security-Policy": "default-src 'none'" });
+      return res.end("not found");
+    }
     // Versions never change, so Cloudflare and browsers can cache them forever.
-    "Cache-Control": "public, max-age=31536000, immutable",
-  });
-  res.end(withShim(v.html));
+    res.writeHead(200, { ...SANDBOX_PAGE_HEADERS, "Cache-Control": "public, max-age=31536000, immutable" });
+    res.end(withShim(v.html));
+  } catch (err) {
+    console.log(`sandbox request failed: ${forLog(err.message)}`);
+    if (!res.headersSent) res.writeHead(500, { "Content-Type": "text/plain", "Content-Security-Policy": "default-src 'none'" });
+    res.end();
+  }
 });
 
 // Fixed route names for the traffic counts (never the raw path, which anyone can make up).

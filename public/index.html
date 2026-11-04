@@ -13,16 +13,13 @@
   <a class="brand" href="/">
     <span>This page rewrites itself</span>
   </a>
-  <div class="warn" role="note" tabindex="0" aria-describedby="warn-tip">
-    <span class="dot" aria-hidden="true"></span>AI-written
-    <span id="warn-tip" class="tip" role="tooltip">The page below is written by an AI from anonymous suggestions.
-      It can say or show anything. Never enter personal information into it.</span>
-  </div>
   <span id="admin-badge" class="admin-badge" hidden>Admin <button id="admin-logout" class="link" type="button">Sign out</button></span>
   <span id="viewers" class="viewers" hidden><span class="live-dot" aria-hidden="true"></span><span id="viewers-n"></span><span class="viewers-lbl"> here now</span></span>
   <div class="help">
-    <button id="help-btn" class="help-btn" type="button" aria-label="What is this?" aria-expanded="false" aria-controls="help-box">?</button>
+    <button id="help-btn" class="warn" type="button" aria-label="AI-written. What is this?" aria-expanded="false" aria-controls="help-box"><span class="dot" aria-hidden="true"></span>AI-written<svg class="caret" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <div id="help-box" class="help-box" role="dialog" aria-label="About this site" hidden>
+      <p class="help-warn">The page below is written by an AI from anonymous suggestions. It can say or show anything.
+        Never enter personal information into it.</p>
       <h2>What is this?</h2>
       <p>A web page that anyone can change. Leave a suggestion and an AI edits the page to follow it, one suggestion
         at a time, in the order they came in. Every version is kept, so you can scrub back through all of them.</p>
