@@ -5,8 +5,10 @@ Read `README.md` (how it works), `LAUNCH.md` (running it, restarting) and `PLAN.
 
 ## It's live: people are using it
 
-- **Reloading code** (`server.mjs`, `lib/`): `kill -USR2 $(lsof -tiTCP:3000 -sTCP:LISTEN)`. It finishes the
-  suggestion being written, then restarts (~1 s) with the line and URLs kept. Never `launchctl kickstart -k` or
+- **Reloading code** (`server.mjs`, `lib/`): `kill -USR2 $(lsof -tiTCP:3000 -sTCP:LISTEN)` (that's `run.mjs`). It
+  finishes the suggestion being written, then hands off to a new worker with no downtime; if the new code fails to
+  start, the old keeps running (check `data/server.log` for `run: reload done` or `run: reload failed`).
+  `run.mjs` itself only changes with a full restart. Never `launchctl kickstart -k` or
   `bootout` for a code change: they fail the suggestion being written and restart the tunnels.
 - **`scripts/reset.sh` deletes all history.** It is not a restart. Only when the owner asks for a fresh start.
 - `public/` files are read per request, so they need no reload, and open pages reload themselves when they change
@@ -19,7 +21,12 @@ Read `README.md` (how it works), `LAUNCH.md` (running it, restarting) and `PLAN.
 
 - `data/site.db` (WAL). Tables: `suggestions` (queued | running | done | rejected | failed | removed), `versions`
   (append-only; never edit or delete), `rules` (active | ended | evicted | removed), `lore` (active | faded | removed), `eras` (one row per era,
-  from its first version). `suggestions.kind` is `'era'` for the server's weekly era suggestion. The server reads rules and the
+  from its first version), `schedules` (active | done | missed | ended | evicted | removed), `shared` (items pages added with SITE.share,
+  per era and channel, each with a `key`: active | gone (a page removed it with SITE.unshare) | evicted (past 300 per
+  channel) | cleared (by a suggestion's `CLEAR SHARED: <channel>` line) | removed (by the admin); clear with
+  `/api/admin/shared/clear`). `suggestions.kind` is
+  `'era'` for the server's weekly era suggestion, `'scheduled'` for a scheduled change that came due and
+  `'cleanup'` for a refactor the server queued in a quiet spell (see README). The server reads rules and the
   line per suggestion, so a careful DB edit applies without a restart. Back up first:
   `sqlite3 data/site.db ".backup data/backups/<name>.db"`.
 - Don't put a version in by hand while a suggestion is running: it's built from the version before and would

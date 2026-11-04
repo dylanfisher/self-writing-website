@@ -23,16 +23,16 @@ if [[ "$1" == tunnel ]]; then
   trap 'echo "$(date "+%F %T") a quick tunnel stopped; exiting so launchd restarts everything (new URLs)";
         kill $W $SERVER $P1 $P2 2>/dev/null; wait; exit 1' USR1
   trap 'kill $W $SERVER $P1 $P2 2>/dev/null' EXIT
-  serve() {  # runs the server and restarts it after a crash (exit code ≠ 0); a clean stop (code 0) ends it
+  # run.mjs owns the ports and runs server.mjs under it: it does code reloads (SIGUSR2) with no downtime and
+  # restarts the server after a crash. This loop only restarts run.mjs itself if it ever dies (exit code ≠ 0);
+  # a clean stop (code 0) ends it.
+  serve() {
     while true; do
-      [[ -f data/secrets.env ]] && { set -a; source data/secrets.env; set +a; }   # re-read, so a reload picks up new keys
-      node server.mjs & SERVER=$!
+      [[ -f data/secrets.env ]] && { set -a; source data/secrets.env; set +a; }
+      node run.mjs & SERVER=$!
       wait $SERVER; local code=$?
       (( code == 0 )) && return 0
-      # 75 is a reload (SIGUSR2): start again at once, since visitors get a 502 until something listens.
-      # A crash waits 5 s, so a server that dies at startup doesn't spin.
-      if (( code == 75 )); then echo "$(date '+%F %T') server reloading"; continue; fi
-      echo "$(date '+%F %T') server exited with code $code; restarting in 5 s"
+      echo "$(date '+%F %T') run.mjs exited with code $code; restarting in 5 s"
       sleep 5
     done
   }
@@ -85,4 +85,4 @@ case "${1:-lan}" in
 esac
 [[ -z "$NAME" || -z "$IP" ]] && { echo "couldn't find this Mac's name/IP for $1"; exit 1; }
 echo "Open http://$NAME:3000 from the other computer."
-HOST=$BIND MAIN_ORIGIN=http://$NAME:3000 SANDBOX_ORIGIN=http://$IP:3001 exec node server.mjs
+HOST=$BIND MAIN_ORIGIN=http://$NAME:3000 SANDBOX_ORIGIN=http://$IP:3001 exec node run.mjs

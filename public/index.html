@@ -142,6 +142,24 @@
         <ul id="lore" class="rules lore"></ul>
         <p id="lore-empty" class="muted rules-empty">Nothing yet. Give something on the page a name or a backstory,
           and the page will remember it.</p>
+        <div class="lore-head">
+          <h3 class="lore-h" id="sched-h">Scheduled <span id="sched-count" class="count"></span></h3>
+          <div class="help">
+            <button id="sched-info-btn" class="help-btn info-btn" type="button" aria-label="What are scheduled changes?" aria-expanded="false" aria-controls="sched-info">i</button>
+            <div id="sched-info" class="help-box" role="dialog" aria-label="About scheduled changes" hidden>
+              <h2>What are scheduled changes?</h2>
+              <p>Suggestions for later: ask for something at a time, like “every morning, make it bright and sunny”
+                or “tomorrow at noon, add a cake”, and the AI schedules it instead of doing it now.</p>
+              <p>When the time comes, it joins the end of the line like any suggestion, so it may land a little
+                after. Times are the site's clock; the list shows them in yours.</p>
+              <p>Up to <strong id="help-sched-max">5</strong> at once, for everyone. A new one pushes out the oldest.
+                To cancel one, suggest “cancel the morning sunshine”, or remove your own with Remove.</p>
+            </div>
+          </div>
+        </div>
+        <ul id="sched" class="rules sched"></ul>
+        <p id="sched-empty" class="muted rules-empty">Nothing yet. Ask for something at a time, like “every
+          evening at 7, light the lanterns”.</p>
       </div>
     </section>
 

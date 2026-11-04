@@ -36,26 +36,33 @@ grep -E '^(Public|main)' data/server.log | tail -2       # current URLs
 scripts/admin-url.sh                                    # admin link (secret)
 ```
 Don't also start it by hand (`nohup ./start-remote.sh tunnel …`): two copies would fight over the ports.
-- **Crash:** the script restarts the server after 5 s; the tunnels stay up, so the URLs don't change.
-- **Reload after editing `server.mjs`/`lib/`:** `kill -USR2 $(lsof -tiTCP:3000 -sTCP:LISTEN)`. Same URLs.
-  (Files in `public/` need no reload.) Safe while people are using the site; see below.
+- **Crash:** `run.mjs` starts the server again (at once, or after 5 s if it died right after starting); the
+  tunnels stay up, so the URLs don't change.
+- **Reload after editing `server.mjs`/`lib/`:** `kill -USR2 $(lsof -tiTCP:3000 -sTCP:LISTEN)` (that's `run.mjs`,
+  which owns the ports). No downtime; see below. (Files in `public/` need no reload.)
 - **Stop everything:** `launchctl bootout $A`. To stop it starting at login too, also delete the plist.
 
 ### Restarting while people are using it
 
 | | Suggestion being written | Line | URLs | Downtime |
 |---|---|---|---|---|
-| `kill -USR2 <pid>` (code reload) | finishes first, then the restart | kept | same | ~1 s |
-| crash | marked failed ("interrupted by a server restart") | kept | same | ~6 s |
+| `kill -USR2 <pid>` (code reload) | finishes first, then the handoff | kept | same | none |
+| crash | marked failed ("interrupted by a server restart") | kept | same | ~1 s (~6 s if it crashes at startup) |
 | `launchctl kickstart -k $A` / `bootout` | marked failed | kept | quick tunnels get new URLs | longer |
 | `scripts/reset.sh` | **not a restart: deletes all history** (backup in `data/backups/`) | | | |
 
-- **Use USR2 for code changes.** The log says `SIGUSR2: restarting once #N is done`; while it waits, no new
-  suggestion starts. It can take as long as that suggestion does (up to `SUGGESTION_SECONDS`, then it restarts
-  anyway). A second USR2 restarts at once, failing the suggestion being written.
+- **Use USR2 for code changes.** `run.mjs` (started by `start-remote.sh`) owns ports 3000/3001 and runs
+  `server.mjs` as a cluster worker. On USR2 the worker finishes the suggestion being written (log: `reload: waiting
+  for #N to finish`; no new one starts meanwhile, up to `SUGGESTION_SECONDS`), then a new worker starts with the
+  new code while the old one keeps serving, and the old one exits once the new one listens (`run: reload done`).
+  Open pages' live connections (WebSocket or event stream) reconnect by themselves.
+- **A bad deploy doesn't take the site down.** If the new code exits or hangs before it listens, `run.mjs` drops it
+  and the old code carries on (`run: reload failed …`, with the error above it). Fix it and send USR2 again.
+- A second USR2 while it waits replaces the worker at once, failing the suggestion being written (~1 s gap).
+- `node server.mjs` on its own still works: then USR2 exits with code 75 for whatever started it to restart.
 - **An interrupted suggestion is never re-run.** It used to go back to the front of the line, so a suggestion that
   kept the model busy (or crashed the server) blocked the line on every restart.
-- **During the gap** (~1 s for a reload, ~6 s after a crash) suggestions can't be sent (the box shows an error) and open pages reconnect by themselves.
+- **During a crash gap** suggestions can't be sent (the box shows an error) and open pages reconnect by themselves.
 - **Open pages reload themselves** when the site's own code changes: `public/` files (noticed within 5 s, no
   restart needed) or `lib/shim.js` (on restart). Changes to `server.mjs`/`lib/model.mjs` alone don't reload anyone.
   Someone typing a suggestion isn't interrupted: the reload waits until they leave the box, and their text is kept.
@@ -76,6 +83,7 @@ Prints two random `https://….trycloudflare.com` URLs (site and sandbox). They 
 Known limits:
 - New URLs on every start. No uptime guarantee; Cloudflare's terms apply.
 - Cloudflare holds back the event stream on quick tunnels (tested 2026-11-03: headers arrive, events never do).
+  Pages try a WebSocket first; whether quick tunnels pass it is untested.
   The page notices after 4 s and polls `/api/state` every 3 s instead, so live progress updates in steps.
 - No Cloudflare rate-limit rules (there's no zone of yours to attach them to). Only the app's own limits apply:
   5 suggestions per visitor per 10 min, 1 in line at a time, 25 in line in total, 4 live connections per visitor.
@@ -98,7 +106,9 @@ Known limits:
       ```sh
       ./start-remote.sh tunnel rewrites.example rewrites-sandbox.example
       ```
-- [ ] Check that live progress streams (no 3-second steps). If it doesn't, something is buffering `/api/events`.
+- [ ] Check that live progress streams (no 3-second steps). Pages use a WebSocket (`/api/ws`; tunnels pass them
+      through, and WebSockets are on by default in the zone's Network settings), else `/api/events`. Tested
+      2026-11-04 on the named tunnel: the WebSocket connects and reconnects after a reload.
 
 ### Rate limiting (site domain → Security → WAF → Rate limiting rules)
 The app already limits each visitor to 30 suggestions per 10 min, 3 in line at a time. The Cloudflare rule stops scripts and floods
@@ -111,7 +121,9 @@ before they reach `mbp2021`, and per-IP counting there can't be faked.
       - Action: Block, for the longest duration the plan allows
 - [ ] If the plan has a second rule, **"api flood"**: `starts_with(http.request.uri.path, "/api/")`, about
       **60 requests per minute** per IP (or the plan's nearest period), Block. Normal visitors make 1 long-lived
-      `/api/events` request plus the occasional suggestion, far below this.
+      live connection (one request, then messages over the WebSocket) plus the occasional suggestion, far below
+      this. A page on the event-stream fallback posts its cursor up to ~8 times a second instead, which a rule like
+      this would block: leave `/api/cursor` and `/api/share` out of it.
 - [ ] Test it: send POSTs to `/api/suggest` in a loop from a phone hotspot and check you get blocked by Cloudflare
       (a Cloudflare page or 429), not only by the app's own "… the most for now" / "still in line" messages.
 

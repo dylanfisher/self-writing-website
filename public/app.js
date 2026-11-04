@@ -88,6 +88,7 @@ function setFrame(src) {
   if (src === shownSrc) return;
   shownSrc = src;
   frameReady = false;
+  frameSubs.clear();
   // While dragging the timeline, only load the version the thumb settles on.
   clearTimeout(frameTimer);
   frameTimer = setTimeout(() => { $("frame").src = src; }, $("frame").src ? 90 : 0);
@@ -97,9 +98,20 @@ $("frame").addEventListener("load", () => { frameReady = true; frameExact = true
 // window.SITE in the frame (lib/shim.js): live facts the page's own scripts can use. Only what this page already
 // shows everyone; sent as data, and only again when it changed (or the frame loaded a new page).
 let siteSig = "";
+// This visitor as the server sees them (SITE.me): from the boot state, /api/state, "hello" and "me" events.
+let meInfo = null;
+// Server clock minus ours (SITE.time()). Only moved when it's off by more than a second, so network jitter
+// doesn't make a SITE update out of every state.
+let skew = 0;
+function takeClock(now) {
+  if (!Number.isFinite(now)) return;
+  const d = now - Date.now();
+  if (Math.abs(d - skew) > 1000) skew = Math.round(d / 1000) * 1000;
+}
 function sendSite(force = false) {
   if (!S || !$("frame").src) return;
   const draft = !!liveDraft();
+  const shown = draft ? null : versions.get(shownId());
   const at = (v) => v.created_at;
   const recent = [];
   for (let id = latestId(); id >= S.first && recent.length < 10; id--) {
@@ -117,6 +129,14 @@ function sendSite(force = false) {
     rules: (S.rules ?? []).map((r) => r.text),
     lore: (S.lore ?? []).map((l) => l.text),
     era: (() => { const e = eraOf(draft ? latestId() : shownId()); return e ? { n: e.n, name: e.name, at: e.started_at } : null; })(),
+    me: meInfo,
+    people: S.people ?? [],
+    stats: S.stats ? { ...S.stats, versions: S.total } : null,
+    page: draft ? { suggestion: S.running?.text ?? null, summary: null, secs: null, tokens: null, bytes: null, at: S.running?.started_at ?? 0 }
+      : shown ? { suggestion: shown.suggestion ?? null, summary: shown.summary ?? null, secs: shown.secs == null ? null : Math.round(shown.secs),
+        tokens: shown.tokens ?? null, bytes: shown.bytes ?? null, at: shown.created_at } : null,
+    tz: S.tz ?? null,
+    skew,
   };
   const sig = JSON.stringify(data);
   if (sig === siteSig && !force) return;
@@ -151,8 +171,10 @@ function postCursor() {
   cursorTimer = null;
   if (!me) return;
   lastCursorPost = Date.now();
+  const c = myCursor && (myCursor.z || cursorKey) ? myCursor : null;
+  if (liveSend({ t: "cursor", k: cursorKey, c })) return;
   fetch("/api/cursor", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: me.token, k: cursorKey, c: myCursor && (myCursor.z || cursorKey) ? myCursor : null }) }).catch(() => {});
+    body: JSON.stringify({ token: me.token, k: cursorKey, c }) }).catch(() => {});
 }
 function queueCursor() {
   cursorTimer ??= setTimeout(postCursor, Math.max(0, 130 - (Date.now() - lastCursorPost)));
@@ -168,7 +190,7 @@ function syncCursorKey() {
 function sendCursors() {
   if (!$("frame").src) return;
   const list = cursorsData && cursorsData.k === cursorKey && frameReady
-    ? cursorsData.list.filter((c) => c.id !== me?.id).map((c) => ({ ...c, hue: hueOf(c.id) }))
+    ? cursorsData.list.filter((c) => c.id !== me?.id).map((c) => ({ ...c, hue: hueOf(c.v ?? c.id) }))
     : [];
   $("frame").contentWindow?.postMessage({ srp: "cursors", list }, "*");
 }
@@ -181,6 +203,58 @@ addEventListener("message", (e) => {
   if (me) queueCursor();
 });
 document.addEventListener("visibilitychange", () => syncCursorKey());
+
+// ---------- shared items (SITE.share in lib/shim.js) ----------
+// The frame asks for a channel ({ srp: "subscribe", ch }): we fetch what's there and pass it in, then pass on new
+// items and removals from the stream ("shared" events). Its own items ({ srp: "share" }) and removals
+// ({ srp: "unshare" }) we send over the WebSocket, or post with our stream token; without a working stream they
+// stay on this screen. Page data, not trusted: the server checks it, and it only ever goes
+// back into the sandboxed frame. When the admin clears a channel the frame uses, we load the page again.
+const frameSubs = new Set();   // channels the page in the frame asked for (cleared when it loads another page)
+let sharesInFlight = 0;
+const ITEM_KEY = /^[a-z0-9]{10}$/;
+// Over the WebSocket, else posted (a few at a time) with the stream token.
+function sendShared(path, m) {
+  if (liveSend(m)) return;
+  if (sharesInFlight >= 4) return;
+  const { t, ...rest } = m;
+  const body = JSON.stringify({ token: me.token, ...rest });
+  if (body.length > 900) return;
+  sharesInFlight++;
+  fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body })
+    .catch(() => {}).finally(() => { sharesInFlight--; });
+}
+const markMine = (item) => ({ ...item, mine: !!meInfo?.id && item.by === meInfo.id });
+addEventListener("message", async (e) => {
+  if (e.source !== $("frame").contentWindow) return;
+  const d = e.data, ch = typeof d?.ch === "string" && d.ch.length <= 24 ? d.ch : null;
+  if (!ch) return;
+  if (d.srp === "subscribe" && frameSubs.size < 20) {
+    frameSubs.add(ch);
+    try {
+      const r = await fetch(`/api/shared?ch=${encodeURIComponent(ch)}`);
+      if (!r.ok) return;
+      const { items } = await r.json();
+      e.source.postMessage({ srp: "shared", ch, items: items.map(markMine) }, "*");
+    } catch {}
+  } else if (d.srp === "share" && me && streamWorks && (d.key == null || ITEM_KEY.test(d.key))) {
+    // No key: a page from before keys (its shim was cached); the server makes one.
+    sendShared("/api/share", { t: "share", ch, data: d.data, keep: d.keep !== false, key: d.key ?? undefined, k: cursorKey });
+  } else if (d.srp === "unshare" && me && streamWorks && ITEM_KEY.test(d.key)) {
+    sendShared("/api/unshare", { t: "unshare", ch, key: d.key });
+  }
+});
+function takeShared(m) {
+  if (!frameSubs.has(m.ch)) return;
+  const out = typeof m.removed === "string" ? { srp: "shared", ch: m.ch, removed: m.removed } : { srp: "shared", ch: m.ch, item: markMine(m.item) };
+  $("frame").contentWindow?.postMessage(out, "*");
+}
+function sharedReset(m) {
+  if (!(m.all ? frameSubs.size : frameSubs.has(m.ch)) || !shownSrc) return;
+  frameSubs.clear();
+  frameReady = false;
+  $("frame").src = shownSrc;   // the same URL again: loads it afresh
+}
 
 // Our pointer over the shell's controls.
 function setChromeCursor(c) {
@@ -254,7 +328,7 @@ function renderChromeCursors() {
     now.add(id);
     let k = chromeCursors.get(id);
     if (!k) {
-      k = { el: chromeArrow(hueOf(id)), x: null, y: null };
+      k = { el: chromeArrow(hueOf(c.v ?? id)), x: null, y: null };
       chromeCursors.set(id, k);
       chromeLayer.append(k.el);
     }
@@ -449,8 +523,9 @@ function renderQueue() {
   $("queue").replaceChildren(...S.queue.map((s, i) =>
     h("li", { class: mine.has(s.id) ? "mine" : "" },
       h("span", { class: "pos" }, `${i + 1}`),
-      h("span", { class: "txt" }, s.text),
-      mine.has(s.id) ? h("span", { class: "tag" }, "yours") : h("span", { class: "tag" }, ago(s.created_at)),
+      h("span", { class: "txt" }, s.kind === "scheduled" ? `⏰ ${s.text}` : s.kind === "cleanup" ? `🧹 ${s.text}` : s.text),
+      mine.has(s.id) ? h("span", { class: "tag" }, "yours")
+        : h("span", { class: "tag" }, s.kind === "scheduled" ? "scheduled" : s.kind === "cleanup" ? "cleanup" : ago(s.created_at)),
       mine.has(s.id) || admin ? h("button", { class: "link", type: "button", onclick: () => removeItem(s.id) },
         mine.has(s.id) ? "Cancel" : "Remove") : null)));
 
@@ -505,6 +580,35 @@ function renderLore() {
         yours || admin ? h("button", { class: "link", type: "button", onclick: () => removeLore(l.id) }, "Forget") : null));
   }).reverse());
 }
+// Scheduled changes: newest first, like rules. when_spec is on the site's clock; next_at shows it in the viewer's.
+function renderSchedules() {
+  const list = S.schedules ?? [], max = S.schedulesMax ?? 5;
+  $("sched-count").textContent = list.length ? `${list.length}/${max}` : "";
+  $("help-sched-max").textContent = String(max);
+  $("sched-empty").hidden = list.length > 0;
+  $("sched").replaceChildren(...list.map((c, i) => {
+    const yours = mine.has(c.suggestion_id);
+    const daily = /^daily /.test(c.when_spec);
+    const next = c.next_at ? new Date(c.next_at) : null;
+    const time = next?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) ?? "";
+    const when = !next ? "" : daily ? `daily ${time}`
+      : `${next.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} ${time}`;
+    return h("li", { class: yours ? "mine" : "", title: `From the suggestion “${c.source}”` +
+      (next ? `. Next: ${next.toLocaleString()}` : "") + (c.runs ? `. Ran ${c.runs} ${c.runs === 1 ? "time" : "times"}` : "") },
+      h("span", { class: "pos" }, "⏰"),
+      h("span", { class: "txt" }, c.text),
+      h("span", { class: "meta" },
+        yours ? h("span", { class: "tag yours" }, "yours") : null,
+        list.length >= max && i === 0 ? h("span", { class: "tag next", title: "The next new one replaces this one" }, "goes next") : null,
+        h("span", { class: "tag" }, when),
+        yours || admin ? h("button", { class: "link", type: "button", onclick: () => removeSchedule(c.id) }, "Remove") : null));
+  }).reverse());
+}
+async function removeSchedule(id) {
+  const r = await api("/api/schedules/remove", { id });
+  if (!r.ok) sticky($("suggest-msg"), "bad", r.data.error ?? "Couldn't remove that.");
+}
+
 async function removeLore(id) {
   const r = await api("/api/lore/remove", { id });
   if (!r.ok) sticky($("suggest-msg"), "bad", r.data.error ?? "Couldn't remove that.");
@@ -539,6 +643,7 @@ function renderNow() {
   $("now-steps").replaceChildren(
     ...(p?.rule ? [h("li", { class: "rule" }, `New rule: ${p.rule}`)] : []),
     ...(p?.lore ? [h("li", { class: "lore" }, `Remembering: ${p.lore}`)] : []),
+    ...(p?.schedule ? [h("li", { class: "sched" }, `Scheduling: ${p.schedule}`)] : []),
     ...steps.map((s, i) => h("li", { class: writing && i === steps.length - 1 ? "current" : "" }, s)));
   $("now-code").hidden = !showCode;
   const tail = p && code.id === p.id ? code.text : "";
@@ -593,7 +698,9 @@ function renderMine() {
   else if (rec?.status === "done") {
     msg.className = "msg good";
     const rule = (S.rules ?? []).find((r) => r.suggestion_id === last);
-    msg.textContent = rule ? `Yours became v${rec.version_id} and a standing rule: “${rule.text}”.` : `Yours became v${rec.version_id}.`;
+    const sched = (S.schedules ?? []).find((c) => c.suggestion_id === last);
+    msg.textContent = rule ? `Yours became v${rec.version_id} and a standing rule: “${rule.text}”.`
+      : sched ? `Yours became v${rec.version_id} and is scheduled: “${sched.text}”.` : `Yours became v${rec.version_id}.`;
     // Published with only the edits that applied: say so, and what was left out.
     if (rec.error) { msg.className = "msg"; msg.textContent += ` Only part of it, though: ${rec.error.replace(/^partly applied: /, "")}.`; }
   }
@@ -608,6 +715,7 @@ function render() {
   renderQueue();
   renderRules();
   renderLore();
+  renderSchedules();
   renderNow();
   renderMine();
   $("admin-badge").hidden = !admin;
@@ -856,6 +964,8 @@ function reloadForUpdate() {
 
 function applyState(next) {
   const first = !S;
+  if (next.me) meInfo = next.me;
+  takeClock(next.now);
   S = next;
   if (build === null) build = S.build ?? null;
   else if (S.build && S.build !== build) { build = S.build; reloadForUpdate(); }
@@ -915,31 +1025,84 @@ async function refresh() {
   } catch {}
 }
 
-// Live updates. If the stream dies without the browser noticing (sleep, network change) or is refused (too many
-// tabs), nothing arrives; a watchdog then reconnects, and polls in the meantime so the page keeps moving.
-let es = null, lastEvent = 0;
-function connect() {
-  es?.close();
-  es = new EventSource("/api/events?delta=1");   // delta: we take incremental progress and drafts
-  const alive = () => { lastEvent = Date.now(); streamWorks = true; };
-  es.addEventListener("ping", alive);
-  es.addEventListener("hello", (e) => { alive(); me = JSON.parse(e.data); cursorKey = null; cursorsData = null; syncCursorKey(); });
-  es.addEventListener("cursors", (e) => { alive(); cursorsData = JSON.parse(e.data); sendCursors(); });
-  es.addEventListener("chrome-cursors", (e) => { alive(); chromeData = JSON.parse(e.data); renderChromeCursors(); });
-  es.addEventListener("state", (e) => { alive(); applyState(JSON.parse(e.data)); });
-  es.addEventListener("viewers", (e) => { alive(); if (S) { S.viewers = JSON.parse(e.data).viewers; renderViewers(); sendSite(); } });
-  es.addEventListener("draft", (e) => { alive(); takeDraft(JSON.parse(e.data)); });
-  es.addEventListener("progress", (e) => {
-    alive();
+// Live updates: a WebSocket (/api/ws), which also carries our cursor and shared items up; an event stream
+// (/api/events) where WebSockets don't get through (we post those instead); polling where neither does.
+// If the connection dies without the browser noticing (sleep, network change) or is refused (too many tabs),
+// nothing arrives; a watchdog then reconnects, and polls in the meantime so the page keeps moving.
+let es = null, ws = null, lastEvent = 0;
+let wsWorked = false;       // a WebSocket has worked on this page (so a failed one is the server, not the network)
+let wsBroken = false;       // WebSockets don't get through here: use the event stream
+let wsTries = 0, wsTimer = null;
+const handlers = {
+  ping() {},
+  hello(d) {
+    me = d; cursorKey = null; cursorsData = null; syncCursorKey();
+    if (me.me) { meInfo = me.me; sendSite(); }
+  },
+  me(d) { meInfo = d; sendSite(); },
+  people(d) { if (S) { S.people = d.people; sendSite(); } },
+  cursors(d) { cursorsData = d; sendCursors(); },
+  shared(d) { takeShared(d); },
+  "shared-reset"(d) { sharedReset(d); },
+  "chrome-cursors"(d) { chromeData = d; renderChromeCursors(); },
+  state(d) { applyState(d); },
+  viewers(d) { if (S) { S.viewers = d.viewers; renderViewers(); sendSite(); } },
+  draft(d) { takeDraft(d); },
+  progress(d) {
     const before = progress?.draft;
-    progress = JSON.parse(e.data);
+    progress = d;
     takeCode(progress);
     if (!S) return;
     renderNow();
     if (progress.draft !== before) { renderStage(); sendSite(); }
-  });
+  },
+};
+function onEvent(name, d) {
+  lastEvent = Date.now(); streamWorks = true;
+  if (Object.hasOwn(handlers, name)) handlers[name](d);
+}
+// Sends over the WebSocket if there's one open; false if not (then the caller posts instead).
+function liveSend(m) {
+  if (ws?.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(m));
+  return true;
+}
+function closeLive() {
+  clearTimeout(wsTimer); wsTimer = null;
+  es?.close(); es = null;
+  if (ws) { const w = ws; ws = null; w.onclose = w.onmessage = null; try { w.close(); } catch {} }
+}
+function connect() {
+  closeLive();
+  if (!wsBroken && "WebSocket" in window) return connectWs();
+  es = new EventSource("/api/events?delta=1");   // delta: we take incremental progress and drafts
+  for (const name of Object.keys(handlers)) es.addEventListener(name, (e) => { try { onEvent(name, JSON.parse(e.data)); } catch {} });
   const self = es;
   setTimeout(() => { if (!streamWorks && es === self) { self.close(); startPolling(); } }, 4000);
+}
+function connectWs() {
+  const w = ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/api/ws");
+  let got = false;
+  w.onmessage = (e) => {
+    if (!got) { got = true; wsWorked = true; wsTries = 0; }
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    if (m && typeof m.event === "string") onEvent(m.event, m.data);
+  };
+  // Never got a message: on a network where it never worked, use the event stream; where it did, the server is
+  // restarting or busy, so try again (after a growing wait, then the event stream). Closed after working (a
+  // reload sends 1012): reconnect after a short random wait, so open pages don't all come back at once.
+  const failed = () => {
+    if (ws !== w) return;
+    ws = null; w.onclose = w.onmessage = null;
+    try { w.close(); } catch {}
+    streamWorks = false;
+    if (got) { wsTimer = setTimeout(connect, 200 + Math.random() * 1800); return; }
+    if (!wsWorked || ++wsTries > 5) { wsBroken = true; return connect(); }
+    wsTimer = setTimeout(connect, Math.min(30_000, 1000 * 2 ** wsTries) * (0.5 + Math.random()));
+  };
+  w.onclose = failed;
+  setTimeout(() => { if (!got) failed(); }, 4000);
 }
 function startPolling() {
   streamWorks = false;
@@ -948,8 +1111,8 @@ function startPolling() {
 }
 setInterval(() => {
   if (!streamWorks || document.hidden) return;
-  if (es.readyState === EventSource.CLOSED || Date.now() - lastEvent > 45_000) {
-    startPolling();     // keep the page current until the stream is back
+  if ((!es && !ws) || es?.readyState === EventSource.CLOSED || Date.now() - lastEvent > 45_000) {
+    startPolling();     // keep the page current until the connection is back
     connect();
   }
 }, 5000);
@@ -965,4 +1128,4 @@ try {
 } catch {}
 connect();
 setInterval(tickElapsed, 1000);
-setInterval(() => { if (S) { renderHistoryTimes(); renderStage(); renderQueue(); renderRules(); renderLore(); renderMine(); } }, 15_000);
+setInterval(() => { if (S) { renderHistoryTimes(); renderStage(); renderQueue(); renderRules(); renderLore(); renderSchedules(); renderMine(); } }, 15_000);
