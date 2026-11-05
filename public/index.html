@@ -105,7 +105,9 @@
 
     <section class="panel rules-panel" aria-labelledby="rules-h">
       <div class="panel-head">
-        <h2 id="rules-h">Rules <span id="rules-count" class="count"></span></h2>
+        <h2 id="rules-h"><button id="rules-toggle" class="collapse-btn" type="button" aria-expanded="true" aria-controls="rules-body">
+          <svg class="chev" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+          Rules <span id="rules-count" class="count"></span></button></h2>
         <div class="help">
           <button id="rules-info-btn" class="help-btn info-btn" type="button" aria-label="What are rules?" aria-expanded="false" aria-controls="rules-info">i</button>
           <div id="rules-info" class="help-box" role="dialog" aria-label="About rules" hidden>
@@ -120,7 +122,7 @@
           </div>
         </div>
       </div>
-      <div class="scroll">
+      <div class="scroll" id="rules-body">
         <ol id="rules" class="rules"></ol>
         <p id="rules-empty" class="muted rules-empty">None yet. Ask for something to happen on every change, like
           “update the title on every edit”, and it becomes a rule.</p>

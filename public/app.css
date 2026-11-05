@@ -102,6 +102,13 @@ iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff;
 .queue-panel { flex: 0 1 auto; max-height: 26%; min-height: 104px; }
 .rules-panel { flex: 0 1 auto; max-height: 24%; min-height: 104px; }
 .history-panel { flex: 1 1 0; min-height: 180px; padding-bottom: 0; }
+.collapse-btn { display: inline-flex; align-items: center; gap: .4rem; background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; cursor: pointer; }
+.collapse-btn .chev { color: var(--faint); transition: transform .15s; }
+.collapse-btn:hover .chev { color: var(--text); }
+.collapse-btn[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.rules-panel.collapsed { min-height: 0; }
+.rules-panel.collapsed .scroll { display: none; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; overscroll-behavior: contain; margin: 0 -8px; padding: 0 8px; }
 .history-panel .scroll { padding-bottom: 12px; }
 /* Short desktop viewports: squeezing every list into the viewport leaves each one a row or two tall, so instead each
@@ -152,6 +159,11 @@ iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff;
 @media (prefers-reduced-motion: reduce) { .steps li.current::before { animation: none; } }
 .bar { height: 4px; background: var(--hover); border-radius: 2px; overflow: hidden; }
 .bar-fill { height: 100%; width: 0; background: var(--primary); transition: width .4s; }
+.bar.thinking .bar-fill { width: 35% !important; background: var(--blue); transition: none; animation: think 1.8s ease-in-out infinite alternate; }
+@keyframes think { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
+#now-elapsed.thinking { color: var(--blue); }
+#now-elapsed.thinking::before { content: "◌ "; display: inline-block; animation: blink 1.2s infinite; }
+@media (prefers-reduced-motion: reduce) { .bar.thinking .bar-fill { animation: none; width: 100% !important; opacity: .4; } #now-elapsed.thinking::before { animation: none; } }
 .now-meta { margin-top: 6px; color: var(--muted); }
 .code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; height: 150px;
   overflow: hidden; font: 11px/1.5 var(--mono); color: var(--muted); white-space: pre;

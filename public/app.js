@@ -637,6 +637,8 @@ function renderNow() {
   const p = progress && progress.id === r.id ? progress : null;
   const pct = !p ? 2 : p.stage === "testing" ? 99 : Math.min(97, (p.chars / Math.max(1, p.expected * 1.05)) * 100);
   $("now-bar").style.width = `${pct}%`;
+  // Thinking writes nothing for up to ~30 s: the bar sweeps instead of sitting at 0.
+  $("now-bar").parentElement.classList.toggle("thinking", p?.stage === "thinking");
   // The model's status line for each edit; the last one is being written (until the browser test starts).
   const steps = p?.steps ?? [];
   const writing = p?.stage !== "testing";
@@ -647,7 +649,7 @@ function renderNow() {
     ...steps.map((s, i) => h("li", { class: writing && i === steps.length - 1 ? "current" : "" }, s)));
   $("now-code").hidden = !showCode;
   const tail = p && code.id === p.id ? code.text : "";
-  if (showCode) $("now-code").textContent = tail || (p?.stage === "waking" ? "Waking the model up…" : "Waiting for the first lines…");   // text, never HTML
+  if (showCode) $("now-code").textContent = tail || (p?.stage === "waking" ? "Waking the model up…" : p?.stage === "thinking" ? "Thinking it through before writing the fix…" : "Waiting for the first lines…");   // text, never HTML
   $("code-toggle").textContent = showCode ? "Hide code" : "Show code";
   tickElapsed();
 }
@@ -678,9 +680,10 @@ function tickElapsed() {
   if (!r || !r.started_at) return;
   const s = Math.max(0, Math.round((Date.now() - r.started_at) / 1000));
   const p = progress && progress.id === r.id ? progress : null;
-  const stage = { waking: "the model was asleep, waking it up (~10 s)", writing: "writing", testing: "testing in a browser", fixing: "fixing a bug it found", shrinking: "too long, trimming",
+  const stage = { waking: "the model was asleep, waking it up (~10 s)", writing: "writing", testing: "testing in a browser", fixing: "fixing a bug it found", thinking: "thinking it through", shrinking: "too long, trimming",
     retrying: "an edit missed, retrying" }[p?.stage] ?? "writing";
-  $("now-elapsed").textContent = `${s}s · ${stage}${p && p.stage !== "testing" ? ` · ${Math.round(p.chars / 100) / 10} KB` : ""}`;
+  $("now-elapsed").textContent = `${s}s · ${stage}${p && p.stage !== "testing" && p.stage !== "thinking" ? ` · ${Math.round(p.chars / 100) / 10} KB` : ""}`;
+  $("now-elapsed").classList.toggle("thinking", p?.stage === "thinking");
 }
 
 function renderMine() {
@@ -833,6 +836,15 @@ $("focus-btn").onclick = () => setFocus(true);
 $("unfocus-btn").onclick = () => setFocus(false);
 setFocus(store.get("srp-focus", false));
 
+// The Rules panel (rules, lore, scheduled) collapses to its header; remembered per browser.
+function setRulesOpen(open) {
+  $("rules-toggle").setAttribute("aria-expanded", String(open));
+  $("rules-toggle").closest(".panel").classList.toggle("collapsed", !open);
+  store.set("srp-rules-open", open);
+}
+$("rules-toggle").addEventListener("click", () => setRulesOpen($("rules-toggle").getAttribute("aria-expanded") !== "true"));
+setRulesOpen(store.get("srp-rules-open", true));
+
 addEventListener("keydown", (e) => {
   if (e.target.closest?.("textarea, input, select") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (!S) return;
@@ -962,6 +974,19 @@ function reloadForUpdate() {
   location.reload();
 }
 
+// The tab icon, which the model redraws now and then to match the page (an easter egg). A new link element rather
+// than a new href: some browsers only notice a changed icon that way.
+function setFavicon(href) {
+  const old = document.querySelector('link[rel="icon"]');
+  if (old?.getAttribute("href") === href) return;
+  const link = document.createElement("link");
+  link.rel = "icon";
+  link.type = "image/png";
+  link.href = href;
+  old?.remove();
+  document.head.append(link);
+}
+
 function applyState(next) {
   const first = !S;
   if (next.me) meInfo = next.me;
@@ -969,6 +994,7 @@ function applyState(next) {
   S = next;
   if (build === null) build = S.build ?? null;
   else if (S.build && S.build !== build) { build = S.build; reloadForUpdate(); }
+  if (S.favicon) setFavicon(S.favicon);
   for (const v of S.history) {
     // A row can change after it's written (scripts/check-versions.mjs marks broken ones): rebuild the list then.
     const old = versions.get(v.id);

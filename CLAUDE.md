@@ -14,6 +14,7 @@ Read `README.md` (how it works), `LAUNCH.md` (running it, restarting) and `PLAN.
 - `public/` files are read per request, so they need no reload, and open pages reload themselves when they change
   (the `build` id in the state). Save whole files (a half-written `app.js` would be loaded by every open page).
 - Don't change omlx settings or swap models while suggestions are running (omlx unloads the model: HTTP 409s).
+  Switch the site's model with `scripts/use-model.sh <id>` (no argument lists them), not by editing code.
 - Check what's running before anything disruptive:
   `sqlite3 data/site.db "select id,status,text from suggestions where status in ('queued','running')"`
 
@@ -21,7 +22,7 @@ Read `README.md` (how it works), `LAUNCH.md` (running it, restarting) and `PLAN.
 
 - `data/site.db` (WAL). Tables: `suggestions` (queued | running | done | rejected | failed | removed), `versions`
   (append-only; never edit or delete), `rules` (active | ended | evicted | removed), `lore` (active | faded | removed), `eras` (one row per era,
-  from its first version), `schedules` (active | done | missed | ended | evicted | removed), `shared` (items pages added with SITE.share,
+  from its first version), `schedules` (active | done | missed | ended | evicted | removed), `favicons` (the model-drawn tab icons; newest is live), `shared` (items pages added with SITE.share,
   per era and channel, each with a `key`: active | gone (a page removed it with SITE.unshare) | evicted (past 300 per
   channel) | cleared (by a suggestion's `CLEAR SHARED: <channel>` line) | removed (by the admin); clear with
   `/api/admin/shared/clear`). `suggestions.kind` is

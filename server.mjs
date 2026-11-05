@@ -13,7 +13,8 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { makeIdeas } from "./lib/ideas.mjs";
 import { rewrite, modelLoaded, statusLines, ruleChanges, parseEdits, applyEdits, sensitiveInput, SEED, FEEDBACK_CAP, MODEL, RULE_CAP, LORE_CAP, ERA_CAP, ERA_TEXT, ERA_SUGGESTION, SCHEDULE_CAP, scheduledSuggestion, SUGGESTION_MS, SIZE_CAP, CLEANUPS, cleanupText, cleanupSuggestion } from "./lib/model.mjs";
-import { compareLooks } from "./lib/check.mjs";
+import { compareLooks, renderIcon } from "./lib/check.mjs";
+import { drawIcon } from "./lib/favicon.mjs";
 import { parseWhen, nextRun } from "./lib/schedule.mjs";
 import { scriptsLast } from "./lib/scripts-last.mjs";
 import { closeChecker } from "./lib/check.mjs";
@@ -60,13 +61,19 @@ const LORE_MAX = Number(env.LORE_MAX ?? 12);
 // Eras: every ERA_DAYS the server queues a suggestion of its own that tidies the page up and names the new era.
 const ERA_MS = Number(env.ERA_DAYS ?? 7) * 86_400_000;
 // Cleanups: after CLEANUP_AFTER visitor suggestions since the last cleanup that was published, once the line has been
-// quiet for CLEANUP_IDLE_MINUTES, the server queues a refactor of its own (one of CLEANUPS, in turn). Only while the
+// quiet for CLEANUP_IDLE_MINUTES (CLEANUP_BUSY_IDLE_MINUTES once overdue), the server queues a refactor of its own (one of CLEANUPS, in turn). Only while the
 // model is still loaded (it sleeps after ~30 min idle; a cleanup never wakes it), and only after at least one
 // visitor suggestion since the last cleanup tried, so cleanups can't keep the model awake by themselves. Published
-// only if the page looks exactly the same (compareLooks) and got smaller. Checked every 5 minutes (a database query;
+// only if the page looks exactly the same (compareLooks) and got smaller. Checked every minute (a database query;
 // the model isn't asked). CLEANUP_AFTER=0 turns them off.
-const CLEANUP_AFTER = Number(env.CLEANUP_AFTER ?? 20);
+const CLEANUP_AFTER = Number(env.CLEANUP_AFTER ?? 10);
 const CLEANUP_IDLE_MS = Number(env.CLEANUP_IDLE_MINUTES ?? 10) * 60_000;
+// Overdue (twice CLEANUP_AFTER without one, as on a busy day): a short gap in the line is enough.
+const CLEANUP_BUSY_IDLE_MS = Number(env.CLEANUP_BUSY_IDLE_MINUTES ?? 3) * 60_000;
+// Favicon: once the line has been quiet for FAVICON_IDLE_MINUTES after the page changed, the model redraws the
+// site's favicon to match the page (a short call of its own, not a suggestion; see drawFavicon). Once per change
+// (cleanups don't count), only while the model is loaded. FAVICON_IDLE_MINUTES=0 turns it off.
+const FAVICON_IDLE_MS = Number(env.FAVICON_IDLE_MINUTES ?? 5) * 60_000;
 // Scheduled changes: a suggestion the model reads as "do this at 7:00 every day" or "tomorrow at noon" is saved and
 // queued by the server when its time comes (checked every 30 s, at the end of the line). Each run costs a whole
 // suggestion, so few: at most SCHEDULES_MAX site-wide and SCHEDULES_PER_VISITOR each; a new one pushes out the oldest.
@@ -121,7 +128,7 @@ db.exec(`
 if (!db.prepare("SELECT 1 FROM pragma_table_info('versions') WHERE name = 'errors'").get()) {
   db.exec("ALTER TABLE versions ADD COLUMN errors TEXT");
 }
-// The model's status lines for this version's edits, joined with " · " ("Making the title wobble · Adding a cloud").
+// The model's status lines for this version's edits, joined with " · " ("Adding cloud styles · Placing the cloud").
 if (!db.prepare("SELECT 1 FROM pragma_table_info('versions') WHERE name = 'summary'").get()) {
   db.exec("ALTER TABLE versions ADD COLUMN summary TEXT");
 }
@@ -243,6 +250,10 @@ db.exec(`
 `);
 // A random id for this database, put in version URLs (/v/12?db=…). Version pages are cached forever, and a reset
 // starts the numbering over, so without it browsers would keep showing the old database's /v/12.
+// Favicons the model drew (see drawFavicon): the newest is the site's. svg is the model's (never served); png is
+// what renderIcon drew from it, served at /favicon/<db id>-<id>.png.
+db.exec(`CREATE TABLE IF NOT EXISTS favicons (
+  id INTEGER PRIMARY KEY, version_id INTEGER NOT NULL, svg TEXT NOT NULL, png BLOB NOT NULL, created_at INTEGER NOT NULL)`);
 db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('db_id', ?)").run(randomBytes(6).toString("hex"));
 const DB_ID = db.prepare("SELECT value FROM meta WHERE key = 'db_id'").get().value;
@@ -303,6 +314,12 @@ const q = {
     UNION ALL SELECT MAX(created_at) FROM suggestions WHERE kind = 'era')`),
   eraWaiting: db.prepare("SELECT 1 FROM suggestions WHERE kind = 'era' AND status IN ('queued','running') LIMIT 1"),
   insertEraSuggestion: db.prepare("INSERT INTO suggestions (text, ip_hash, status, created_at, kind) VALUES (?, 'era', 'queued', ?, 'era')"),
+  latestFavicon: db.prepare("SELECT id, version_id FROM favicons ORDER BY id DESC LIMIT 1"),
+  faviconPng: db.prepare("SELECT png FROM favicons WHERE id = ?"),
+  insertFavicon: db.prepare("INSERT INTO favicons (version_id, svg, png, created_at) VALUES (?, ?, ?, ?)"),
+  // Versions after this one that changed the page (a cleanup's don't).
+  changedSince: db.prepare(`SELECT COUNT(*) AS n FROM versions v LEFT JOIN suggestions s ON s.id = v.suggestion_id
+    WHERE v.id > ? AND s.kind IS NOT 'cleanup'`),
   insertCleanup: db.prepare("INSERT INTO suggestions (text, ip_hash, status, created_at, kind) VALUES (?, 'cleanup', 'queued', ?, 'cleanup')"),
   // For queueCleanup: cleanups tried so far and when the last was queued, when the last one published was, how many
   // visitor suggestions were published since then and since the last try, and when anything last finished.
@@ -461,6 +478,7 @@ function state(historyLimit = HISTORY_PAGE) {
     schedules: schedulesForState(),
     schedulesMax: SCHEDULES_MAX,
     ideas,
+    favicon: faviconUrl(),
     build: build(),
     shim: SHIM_HASH,   // in sandbox URLs: version pages are cached for good, with the shim inlined
     model: MODEL,
@@ -1074,14 +1092,15 @@ setInterval(queueEra, 3_600_000).unref();
 
 // Queues a cleanup if it's time (see CLEANUP_AFTER). force (the admin): now, whatever the counts and the model.
 async function queueCleanup(force = false) {
-  if (!force && (!CLEANUP_AFTER || working || draining || q.queuedCount.get().n || q.running.get())) return false;
+  if (!force && (!CLEANUP_AFTER || working || draining || favicon || q.queuedCount.get().n || q.running.get())) return false;
   const st = q.cleanupState.get();
   if (!force) {
-    if (Date.now() - (st.lastFinished ?? 0) < CLEANUP_IDLE_MS) return false;
-    if (q.visitorDoneSince.get(st.lastDone).n < CLEANUP_AFTER) return false;
+    const since = q.visitorDoneSince.get(st.lastDone).n;
+    if (since < CLEANUP_AFTER) return false;
+    if (Date.now() - (st.lastFinished ?? 0) < (since >= 2 * CLEANUP_AFTER ? CLEANUP_BUSY_IDLE_MS : CLEANUP_IDLE_MS)) return false;
     if (!q.visitorDoneSince.get(st.lastTry).n) return false;   // nothing new since the last try
     if (await modelLoaded() !== true) return false;   // asleep (or unknown): don't wake it for this
-    if (working || q.queuedCount.get().n) return false;   // someone came along meanwhile
+    if (working || favicon || q.queuedCount.get().n) return false;   // someone came along meanwhile
   }
   const c = CLEANUPS[Number(st.tries) % CLEANUPS.length];
   q.insertCleanup.run(cleanupText(c), Date.now());
@@ -1090,7 +1109,48 @@ async function queueCleanup(force = false) {
   work();
   return true;
 }
-setInterval(() => queueCleanup().catch((err) => console.log(`cleanup check failed: ${err.message}`)), 300_000).unref();
+setInterval(() => queueCleanup().catch((err) => console.log(`cleanup check failed: ${err.message}`)), 60_000).unref();
+
+// Redraws the favicon if it's time (see FAVICON_IDLE_MINUTES): the model draws an SVG from the page, renderIcon
+// turns it into a PNG, and pages swap their tab icon (the favicon URL in the state). force (the admin): now.
+// A visitor's suggestion stops one being drawn (see /api/suggest); it's tried again in the next quiet spell.
+let favicon = null;        // the one being drawn: { ac }
+let faviconTried = null;   // the version last tried, so a failed drawing isn't retried until the page changes
+const faviconUrl = () => { const f = q.latestFavicon.get(); return f ? `/favicon/${DB_ID}-${f.id}.png` : null; };
+async function drawFavicon(force = false) {
+  if (favicon || draining) return { ok: false, error: favicon ? "already drawing one" : "reloading" };
+  const cur = q.latest.get();
+  if (!cur) return { ok: false, error: "no page yet" };
+  if (!force) {
+    if (!FAVICON_IDLE_MS || working || q.queuedCount.get().n || q.running.get() || faviconTried === cur.id) return { ok: false };
+    if (!q.changedSince.get(q.latestFavicon.get()?.version_id ?? 0).n) return { ok: false };
+    if (Date.now() - (q.cleanupState.get().lastFinished ?? 0) < FAVICON_IDLE_MS) return { ok: false };
+    if (await modelLoaded() !== true) return { ok: false };   // asleep (or unknown): don't wake it for this
+    if (working || favicon || q.queuedCount.get().n) return { ok: false };   // someone came along meanwhile
+  }
+  faviconTried = cur.id;
+  favicon = { ac: new AbortController() };
+  const started = Date.now();
+  try {
+    const recent = db.prepare(`SELECT text FROM suggestions WHERE status = 'done' AND (kind IS NULL OR kind = 'scheduled')
+      ORDER BY id DESC LIMIT 5`).all().map((r) => r.text);
+    const drawn = await drawIcon(cur.html, { era: eras().at(-1)?.name, lore: q.activeLore.all().map((l) => l.text), recent,
+      signal: favicon.ac.signal });
+    const r = drawn.error ? drawn : await renderIcon(drawn.svg);
+    if (favicon.ac.signal.aborted) { faviconTried = null; return { ok: false, error: "stopped for a visitor's suggestion" }; }
+    if (r.error) {
+      console.log(`favicon for v${cur.id} not drawn: ${forLog(r.error)}`);
+      return { ok: false, error: r.error };
+    }
+    const { lastInsertRowid } = q.insertFavicon.run(cur.id, drawn.svg, r.png, Date.now());
+    console.log(`new favicon ${lastInsertRowid} for v${cur.id} (${drawn.svg.length} characters of SVG, ${((Date.now() - started) / 1000).toFixed(0)} s)${force ? " (admin)" : ""}`);
+    broadcastState();
+    return { ok: true, id: Number(lastInsertRowid) };
+  } finally {
+    favicon = null;
+  }
+}
+setInterval(() => drawFavicon().catch((err) => console.log(`favicon check failed: ${err.message}`)), 60_000).unref();
 
 // A cleanup's result is published only if it's smaller and looks exactly like the page before it (two screen sizes,
 // clock and randomness frozen); anything else, or a visitor's suggestion arriving meanwhile, rejects it.
@@ -1205,6 +1265,7 @@ function indexHtml(req) {
   const boot = JSON.stringify({ ...state(), me: meOfReq(req), progress }).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
   return staticFile("index.html").body.toString("utf8")
     .replace(/(href|src)="\/(app\.css|app\.js|favicon\.svg)"/g, (_, attr, name) => `${attr}="/${name}?v=${staticFile(name).hash}"`)
+    .replace(/<link rel="icon"[^>]*>/, (tag) => { const f = faviconUrl(); return f ? `<link rel="icon" href="${f}" type="image/png">` : tag; })
     .replace("</head>", () => `<script id="boot" type="application/json">${boot}</script>\n</head>`);
 }
 
@@ -1306,6 +1367,15 @@ const main = http.createServer(async (req, res) => {
   try { url = new URL(req.url, "http://x"); } catch { return json(res, 400, { error: "bad request" }); }
   const path = url.pathname;
   try {
+    const fav = (req.method === "GET" || req.method === "HEAD") && /^\/favicon\/([0-9a-f]+)-(\d+)\.png$/.exec(path);
+    if (fav) {
+      // Drawn here from the model's SVG (never the SVG itself): an inert image, so it can come from this origin.
+      const row = fav[1] === DB_ID ? q.faviconPng.get(Number(fav[2])) : null;
+      if (!row) return json(res, 404, { error: "not found" });
+      res.writeHead(200, { "Content-Type": "image/png", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'", "Cache-Control": "public, max-age=31536000, immutable" });
+      return res.end(req.method === "HEAD" ? undefined : Buffer.from(row.png));
+    }
     if ((req.method === "GET" || req.method === "HEAD") && STATIC[path]) {
       const [file, type] = STATIC[path];
       // The page itself is never cached; an asset is cached for good only when asked for by its current hash.
@@ -1408,6 +1478,10 @@ const main = http.createServer(async (req, res) => {
         interruptible.ac.abort();
         console.log(`#${interruptible.id} cleanup stopped for a visitor's suggestion`);
       }
+      if (favicon && !favicon.ac.signal.aborted) {
+        favicon.ac.abort();
+        console.log("favicon drawing stopped for a visitor's suggestion");
+      }
       broadcastState();
       work();
       return json(res, 202, { id: Number(lastInsertRowid) });
@@ -1479,6 +1553,9 @@ const main = http.createServer(async (req, res) => {
       }
       if (path === "/api/admin/era") {
         return json(res, 200, { ok: queueEra(true) });
+      }
+      if (path === "/api/admin/favicon") {
+        return json(res, 200, await drawFavicon(true));
       }
       if (path === "/api/admin/cleanup") {
         return json(res, 200, { ok: await queueCleanup(true) });
@@ -1570,7 +1647,7 @@ const sandbox = http.createServer((req, res) => {
 
 // Fixed route names for the traffic counts (never the raw path, which anyone can make up).
 const MAIN_ROUTES = new Set(["/", "/api/state", "/api/events", "/api/history", "/api/suggest", "/api/cursor", "/api/share", "/api/unshare", "/api/shared"]);
-stats.track(main, "main", (p) => MAIN_ROUTES.has(p) ? p : STATIC[p] ? "assets" : p.startsWith("/api/") ? "/api/other" : "other");
+stats.track(main, "main", (p) => MAIN_ROUTES.has(p) ? p : STATIC[p] || p.startsWith("/favicon/") ? "assets" : p.startsWith("/api/") ? "/api/other" : "other");
 stats.track(sandbox, "sandbox", (p) => /^\/v\/\d+$/.test(p) ? "/v" : /^\/d\/\d+$/.test(p) ? "/d" : "other");
 
 main.listen(PORT, HOST, () => {

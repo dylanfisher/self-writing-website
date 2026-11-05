@@ -1,7 +1,7 @@
 # This page rewrites itself
 
-Visitors leave one suggestion each. A local model (Qwen on omlx, `127.0.0.1:8000`) changes the page to follow it by
-answering with find/replace edit blocks, which the server applies to the current version (a reply that is a whole
+Visitors leave one suggestion each. A local model (Qwen on omlx, `127.0.0.1:8000`; see "Switching models") changes the page to follow it by
+answering with SEARCH/REPLACE edit blocks, which the server applies to the current version (a reply that is a whole
 document is accepted as a full rewrite). The prompt also carries memory: the same visitor's last 8 suggestions from the
 past 2 hours, so follow-ups read as corrections, and the last 5 changes by others, each with how long ago it was and
 what was actually done (the model's status lines for that version). Constants at the top of `server.mjs`. Every version is kept. See `PLAN.md` for the design and security model.
@@ -28,7 +28,7 @@ How a suggestion is handled: the model writes the page (streamed live to every v
 headless browser; if an edit doesn't match, the page is too big or it throws a new JavaScript error, the model gets up
 to three more attempts (`MAX_ATTEMPTS`, 4 in all) with the problem spelled out. When only some edits miss, the ones
 that applied are kept and the model is asked for the missing ones only (much shorter than writing them all again,
-and the draft stays on screen). An edit whose replacement equals its FIND changes nothing and is skipped. A page that
+and the draft stays on screen). An edit whose replacement equals its SEARCH text changes nothing and is skipped. A page that
 is still worse than the current one is skipped and shown under Up next. A suggestion that fails is never re-run, and
 neither is one interrupted by a restart (see LAUNCH.md, "Restarting while people are using it").
 
@@ -51,6 +51,43 @@ scripts (those could have set the new markup up differently on a real load).
 server had cached. Only the system prompt is ever reused: for this hybrid model omlx resumes from the end of the
 system prompt or from whole 4096-token blocks, and a prompt (system prompt and page) is usually shorter than that.
 So pre-reading the next page while idle saves nothing, and isn't done.
+
+**Edit format.** Each edit is a status line, then `<<<<<<< SEARCH`, the text to find, `=======`, the replacement and
+`>>>>>>> REPLACE` (the form coding models are trained on; the older `<<<<<<< FIND` header is still accepted). The
+user message ends with a one-line reminder of the form. The commonest bad reply was a status line and nothing else:
+then the model is started again on its own lines plus a `<<<<<<< SEARCH` line, with the same prompt, and it goes on
+from there (an attempt, but no rejection note). Compare prompts or models on recent real suggestions with
+`node scripts/eval-format.mjs [count]` (format only: no memory, no browser check; only in a quiet spell, since it
+competes with live suggestions for the model).
+
+**Switching models.** `scripts/use-model.sh` lists the models in `~/.omlx/models` and which one is in use;
+`scripts/use-model.sh <id>` writes `data/model` and reloads (the suggestion being written finishes on the old model;
+omlx loads the new one on the next request). `$MODEL` in `data/secrets.env` would win over `data/model`. In use:
+`Qwen3.6-35B-A3B-oQ4e-mtp` (22 GB, omlx's oQ4e 4-bit with the model's own multi-token-prediction head kept and
+`mtp_enabled` on in omlx; since 2026-11-04). Before it: `Qwen3.6-35B-A3B-MLX-6bit` (27 GB, still in `~/.omlx/models`;
+its conversion dropped the MTP weights, and the `Qwen3.6-35B-A3B-DFlash` draft model is set for it with `dflash_enabled` off).
+Tried and dropped (2026-11-04, `eval-format.mjs` on 12 recent suggestions): `Qwen3-Coder-Next` 4-bit (45 GB, 80B
+total, 3B active) was usable on the first try 7/12 against 12/12, at 22 tok/s against ~70 (about 60 s a suggestion
+against 20 s), and needed the GPU memory limit raised above macOS's default 48 GB (`iogpu.wired_limit_mb`) and
+omlx's `memory_guard_custom_ceiling_gb` to match.
+Also tried 2026-11-04 (`eval-format.mjs 20` for first-try quality, `bench-model.mjs 2` for speed), none worth keeping:
+the baseline was 14/20 clean, 71 tok/s writing (and 10–14/20 is noise at 20 replies). DFlash on: 10/20, 61 tok/s
+(slower on every reply, worst on short ones, despite ~4.7 tokens accepted per step), and with the custom kernels ~74
+tok/s, no real gain. KV cache compression (`affine8`): 12/20, 66 tok/s (prompts are only ~10k tokens). 4-bit
+(`Qwen3.6-35B-A3B-oQ4e-mtp`, MTP off): 11/20, 71 tok/s, so no faster: with 3B active parameters decoding isn't
+limited by memory bandwidth here. The same 4-bit with MTP on (kept): 16/20, 0 SEARCH parts missed, 90 tok/s
+(~5 tokens accepted per step), the only change that helped. Prefill is the same in all of them (~600 tok/s). Thinking is
+already off, and the SSD prefix cache already on (`~/.omlx/cache`); omlx sets its 4096-token blocks itself for this
+model, and only whole blocks are reused, so a few hundred tokens more of page can mean ~1 s more to first text.
+omlx is built with its native kernels (`brew reinstall omlx --with-custom-kernel`, needs Xcode's Metal Toolchain:
+`xcodebuild -downloadComponent MetalToolchain`); check with `curl -s localhost:8000/api/status` → `custom_kernels`.
+They gave ~2% on the 6-bit model; without them omlx falls back silently.
+
+**Sampling and thinking.** Replies use temperature 0.7 (`MODEL_TEMPERATURE` overrides it; 0.4 scored the same on
+30 replayed suggestions). The model never thinks. Tried 2026-11-04 on the 4-bit MTP model: thinking on every reply
+made 15 of 20 first replies clean against 16, at 34 s against 12 s; thinking in the fix-up rounds after a reply
+broke the page (26 broken replies replayed) fixed 24 against 23, at 76 s against 39 s. (On the old 6-bit model,
+thinking on every reply had made 27 of 30 clean against 23, at 45 s against 15 s.) `EVAL_THINK=1` still tries it.
 
 **Time limits and loops.** A reply can take as long as it needs while it makes progress: each edit block must
 finish within `EDIT_BLOCK_SECONDS` (120) of the previous one, and text must keep arriving (30 s). A reply that
@@ -84,15 +121,25 @@ era…"; the model gets `ERA_SUGGESTION`): a light tidy-up that keeps the page's
 is. Checked hourly; a failed era waits for the next interval. To start one now (admin):
 `curl -s -X POST http://127.0.0.1:3000/api/admin/era -H "Authorization: Bearer $(tr -d '\n' < data/admin-token)" -H "Content-Type: application/json" -d '{}'`
 
-**Cleanups.** After `CLEANUP_AFTER` (20) visitor suggestions since the last published cleanup, once nothing has
-finished for `CLEANUP_IDLE_MINUTES` (10), the server queues a refactor of its own (`kind = 'cleanup'`, shown as
+**Favicon.** An easter egg: once the line has been quiet for `FAVICON_IDLE_MINUTES` (5) after the page changed
+(cleanups don't count), the model redraws the site's favicon to match the page. It's a short call of its own
+(`lib/favicon.mjs`, ~10 s), not a suggestion: no version, nothing in the line. The model writes a 32×32 SVG, which
+is never served; `renderIcon` in `lib/check.mjs` draws it to a 64×64 PNG in the checking browser (scripts off, no
+network) and rejects blank or single-color ones. PNGs go in the `favicons` table and are served from the main origin
+at `/favicon/<db id>-<id>.png`; the state's `favicon` names the newest, and open pages swap their tab icon. One try
+per change, only while the model is loaded, and a visitor's suggestion stops one being drawn. Redraw now:
+`curl -s -X POST http://127.0.0.1:3000/api/admin/favicon -H "Authorization: Bearer $(tr -d '\n' < data/admin-token)" -H "Content-Type: application/json" -d '{}'`
+
+**Cleanups.** After `CLEANUP_AFTER` (10) visitor suggestions since the last published cleanup, once nothing has
+finished for `CLEANUP_IDLE_MINUTES` (10), or for `CLEANUP_BUSY_IDLE_MINUTES` (3) once twice that many have piled up
+(a busy day), the server queues a refactor of its own (`kind = 'cleanup'`, shown as
 "🧹 Tidying the code: …"). Each one is a single narrow job from `CLEANUPS` in `lib/model.mjs`, taken in turn: unused
 CSS, dead script, duplicates, leftovers. It sees no standing rules, memory or schedules, and any RULE/LORE/SCHEDULE
 lines it writes are ignored. It's published only if the page got smaller and `compareLooks` (`lib/check.mjs`) finds it
 looks exactly the same. That check renders the old and new page at 1200×800 and 390×844 with the clock and
 `Math.random` frozen, compares the pixels and the text, and allows only as much difference as the old page has
 against itself. A visitor's suggestion stops a cleanup that's being written. To keep the model from staying awake,
-the check (every 5 minutes) is only a database query, and it queues a cleanup only if the model is still loaded and
+the check (every minute) is only a database query, and it queues a cleanup only if the model is still loaded and
 at least one visitor suggestion has finished since the last cleanup was tried. `CLEANUP_AFTER=0` turns cleanups off.
 To queue one now (admin):
 `curl -s -X POST http://127.0.0.1:3000/api/admin/cleanup -H "Authorization: Bearer $(tr -d '\n' < data/admin-token)" -H "Content-Type: application/json" -d '{}'`
@@ -182,6 +229,8 @@ newest 250 versions and loads older ones in pages; the slider always covers all 
 | `lib/shared.mjs` | checks the data of shared items (`SITE.share`) on the server; the shim checks the same |
 | `scripts/test-shim.mjs` / `scripts/test-shim-history.mjs` | tests the patching and cursors; replays real version pairs through it |
 | `scripts/bench-model.mjs` | times the model on the latest page (first text, tokens/s), for comparing model-server settings |
+| `scripts/eval-format.mjs` | replays recent suggestions on the page each was made on: how many replies are usable edits on the first try (`MODEL=…`, `MODEL_LIB=…` to compare) |
+| `scripts/use-model.sh` | lists the omlx models, or switches the site to one (`data/model`) with a reload |
 | `rewrite.mjs` | the same rewrite from the command line, writing to `versions/` (for tuning the prompt) |
 | `scripts/import-cli-versions.mjs` | copies `versions/` into a fresh `data/site.db` so the site has history |
 | `data/attempts/` | raw replies of failed attempts, per suggestion id, for debugging the prompt |
@@ -206,7 +255,8 @@ are kept.
 | `RULES_MAX` | `5` | Standing rules active at once, site-wide. |
 | `LORE_MAX` | `12` | Lore active at once; a new one fades out the oldest. |
 | `ERA_DAYS` | `7` | Days between new eras. |
-| `CLEANUP_AFTER` / `CLEANUP_IDLE_MINUTES` | `20` / `10` | Visitor suggestions between cleanups / quiet minutes before one (`0` turns them off). |
+| `CLEANUP_AFTER` / `CLEANUP_IDLE_MINUTES` / `CLEANUP_BUSY_IDLE_MINUTES` | `10` / `10` / `3` | Visitor suggestions between cleanups / quiet minutes before one / quiet minutes once twice `CLEANUP_AFTER` have piled up (`0` turns them off). |
+| `FAVICON_IDLE_MINUTES` | `5` | Quiet minutes after a change before the favicon is redrawn (`0` turns it off). |
 | `SCHEDULES_MAX` / `SCHEDULES_PER_VISITOR` | `5` / `2` | Scheduled changes active at once, site-wide / per visitor; a new one pushes out the oldest. |
 | `EDIT_BLOCK_SECONDS` | `120` | Longest the model may spend on one edit block. |
 | `SUGGESTION_SECONDS` | `600` | Safety cap on a whole suggestion, all attempts included. |
