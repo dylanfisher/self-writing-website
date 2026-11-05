@@ -12,7 +12,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { makeIdeas } from "./lib/ideas.mjs";
-import { rewrite, modelLoaded, statusLines, ruleChanges, parseEdits, applyEdits, sensitiveInput, SEED, FEEDBACK_CAP, MODEL, RULE_CAP, LORE_CAP, ERA_CAP, ERA_TEXT, ERA_SUGGESTION, SCHEDULE_CAP, scheduledSuggestion, SUGGESTION_MS, SIZE_CAP, CLEANUPS, cleanupText, cleanupSuggestion } from "./lib/model.mjs";
+import { looksLikeWipe, confirmWipe } from "./lib/wipe.mjs";
+import { rewrite, modelLoaded, warmCache, statusLines, ruleChanges, parseEdits, applyEdits, sensitiveInput, SEED, FEEDBACK_CAP, MODEL, RULE_CAP, LORE_CAP, ERA_CAP, ERA_TEXT, ERA_SUGGESTION, SCHEDULE_CAP, scheduledSuggestion, SUGGESTION_MS, SIZE_CAP, CLEANUPS, cleanupText, cleanupSuggestion } from "./lib/model.mjs";
 import { compareLooks, renderIcon } from "./lib/check.mjs";
 import { drawIcon } from "./lib/favicon.mjs";
 import { parseWhen, nextRun } from "./lib/schedule.mjs";
@@ -333,10 +334,10 @@ const q = {
   // With what was actually done: the model's status lines for the version each one became.
   memoryMine: db.prepare(`
     SELECT s.text, s.status, s.error, s.finished_at, s.version_id, v.summary FROM suggestions s LEFT JOIN versions v ON v.id = s.version_id
-    WHERE s.ip_hash = ? AND s.id < ? AND s.status IN ('done','rejected','failed') AND s.finished_at > ? ORDER BY s.id DESC LIMIT ?`),
+    WHERE s.ip_hash = ? AND s.id < ? AND s.id > ? AND s.status IN ('done','rejected','failed') AND s.finished_at > ? ORDER BY s.id DESC LIMIT ?`),
   memoryOthers: db.prepare(`
     SELECT s.text, s.status, s.finished_at, s.version_id, v.summary FROM suggestions s LEFT JOIN versions v ON v.id = s.version_id
-    WHERE s.ip_hash != ? AND s.id < ? AND s.status = 'done' ORDER BY s.id DESC LIMIT ?`),
+    WHERE s.ip_hash != ? AND s.id < ? AND s.id > ? AND s.status = 'done' ORDER BY s.id DESC LIMIT ?`),
   start: db.prepare("UPDATE suggestions SET status = 'running', started_at = ? WHERE id = ?"),
   finish: db.prepare("UPDATE suggestions SET status = ?, error = ?, version_id = ?, finished_at = ? WHERE id = ?"),
   usage: db.prepare("UPDATE suggestions SET tokens = ?, secs = ? WHERE id = ?"),
@@ -612,6 +613,8 @@ setInterval(() => {
 // those for the channels the page uses; a page asks for what's there already with GET /api/shared?ch=. The admin
 // can clear a channel ("shared-reset": pages using it reload).
 const SHARE_BURST = 20, SHARE_PER_SEC = 4;
+// keep: false items have their own bucket, roomier: movement everyone sees (the shim sends at most 8 a second).
+const LIVE_BURST = 16, LIVE_PER_SEC = 10;
 const SHARED_SENT = 300;        // items a page gets per channel, the newest
 const SHARED_KEEP = 300;        // active items kept per channel (the same, so what's kept is what pages get)
 const SHARED_ERA_MAX = 3000;    // active items per era, all channels
@@ -625,12 +628,13 @@ function newSharedEra() {
   broadcast("shared-reset", { all: true });
 }
 setInterval(() => { const t = Date.now() - 60_000; for (const [h, b] of shareBuckets) if (b.at < t) shareBuckets.delete(h); }, 60_000).unref();
-// One from the visitor's bucket; false if it's empty.
-function takeShareToken(s, now) {
-  const b = shareBuckets.get(s.who) ?? { n: SHARE_BURST, at: now };
-  b.n = Math.min(SHARE_BURST, b.n + (now - b.at) / 1000 * SHARE_PER_SEC);
+// One from the visitor's bucket (live: the one for keep: false items); false if it's empty.
+function takeShareToken(s, now, live = false) {
+  const id = live ? `${s.who}:live` : s.who, burst = live ? LIVE_BURST : SHARE_BURST;
+  const b = shareBuckets.get(id) ?? { n: burst, at: now };
+  b.n = Math.min(burst, b.n + (now - b.at) / 1000 * (live ? LIVE_PER_SEC : SHARE_PER_SEC));
   b.at = now;
-  shareBuckets.set(s.who, b);
+  shareBuckets.set(id, b);
   if (b.n < 1) return false;
   b.n -= 1;
   return true;
@@ -647,8 +651,8 @@ function postShare(s, body) {
   const key = body.key == null ? newItemKey() : String(body.key);
   if (!ITEM_KEY.test(key)) return [400, { error: "bad key" }];
   const now = Date.now();
-  if (!takeShareToken(s, now)) return [429, { error: "too fast" }];
   const keep = body.keep !== false;
+  if (!takeShareToken(s, now, !keep)) return [429, { error: "too fast" }];
   let id = 0;
   const evicted = [];
   if (keep) {
@@ -762,6 +766,14 @@ async function work() {
       progress = { id: job.id, stage: "writing", chars: 0, expected: job.kind === "era" ? 4000 : 1500, tail: "", end: 0, reply: 0, steps: [], rule: null, lore: null, schedule: null, draft: null, draftBlocks: 0 };
       draftOf = { base: null, blocks: 0 };
       draftVersion = cur;
+      // "Delete everything, start over": done at once by the server, not edit by edit (see lib/wipe.mjs).
+      if (!job.kind && looksLikeWipe(job.text) && await confirmWipe(job.text)) {
+        blankSlate(job);
+        progress = null;
+        broadcastState();
+        refreshIdeas();
+        continue;
+      }
       const rules = q.activeRules.all();   // as numbered in this prompt; END RULE: n refers to rules[n - 1]
       const lore = q.activeLore.all();     // likewise FORGET LORE: n refers to lore[n - 1]
       const schedules = q.activeSchedules.all();   // and END SCHEDULE: n to schedules[n - 1]
@@ -776,8 +788,8 @@ async function work() {
         scheduled: job.kind === "scheduled",   // its text is the change itself, not a request to schedule one
         era: eras().at(-1),
         // A scheduled change's "earlier suggestions" would be other schedules' runs, not one visitor's follow-ups.
-        mine: job.kind === "scheduled" ? [] : q.memoryMine.all(job.ip_hash, job.id, Date.now() - MEMORY_MINE_MINUTES * 60_000, MEMORY_MINE).reverse(),
-        others: q.memoryOthers.all(job.ip_hash, job.id, MEMORY_OTHERS).reverse(),
+        mine: job.kind === "scheduled" ? [] : q.memoryMine.all(job.ip_hash, job.id, wipedAfter, Date.now() - MEMORY_MINE_MINUTES * 60_000, MEMORY_MINE).reverse(),
+        others: q.memoryOthers.all(job.ip_hash, job.id, wipedAfter, MEMORY_OTHERS).reverse(),
         // What CLEAR SHARED can name. Not for an era: the new era starts with none anyway.
         shared: job.kind === "era" ? [] : q.sharedActive.all(sharedEra).map((r) => ({ ch: r.ch, n: Number(r.n) })),
       };
@@ -906,6 +918,7 @@ async function work() {
   } finally {
     working = false;
     refreshIdeas();
+    warmUp().catch((err) => console.log(`cache warm-up failed: ${err.message}`));
   }
 }
 // " · first text 1.2 s, 3800/4100 cached" for the log: how long the model read before writing.
@@ -995,6 +1008,46 @@ function addLore(changes, shown, job, versionId, now) {
     return "";
   }
   return notes.join("; ");
+}
+
+// ---------- blank slate ----------
+// A suggestion that asked for everything to be erased (lib/wipe.mjs): the first page comes back as a new version,
+// and every active rule, piece of lore, schedule and shared item (this era) is ended, all marked "blank slate #id"
+// so the admin can bring them back (/api/admin/unwipe). Scheduled changes already in line are taken out. Prompts
+// after it don't list suggestions from before it as earlier suggestions (wipedAfter).
+let wipedAfter = db.prepare("SELECT COALESCE(MAX(suggestion_id), 0) AS id FROM versions WHERE note = 'blank slate'").get().id;
+function blankSlate(job) {
+  const t0 = Date.now(), by = `blank slate #${job.id}`;
+  let versionId, counts;
+  db.exec("BEGIN");
+  try {
+    versionId = Number(q.insertVersion.run(SEED, job.id, "blank slate", Buffer.byteLength(SEED), 0, t0, null, "Starting over from a blank slate").lastInsertRowid);
+    counts = {
+      rules: q.activeRules.all().filter((r) => q.endRule.run("ended", t0, by, r.id).changes).length,
+      lore: q.activeLore.all().filter((l) => q.endLore.run("removed", t0, by, l.id).changes).length,
+      schedules: q.activeSchedules.all().filter((c) => q.endSchedule.run("ended", t0, by, c.id).changes).length,
+      queued: Number(db.prepare("UPDATE suggestions SET status = 'removed', finished_at = ? WHERE status = 'queued' AND kind = 'scheduled'").run(t0).changes),
+      shared: Number(db.prepare("UPDATE shared SET status = 'cleared' WHERE era = ? AND status = 'active'").run(sharedEra).changes),
+    };
+    q.usage.run(0, (Date.now() - t0) / 1000, job.id);
+    q.finish.run("done", null, versionId, Date.now(), job.id);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    q.finish.run("failed", `blank slate failed: ${err.message}`, null, Date.now(), job.id);
+    console.log(`#${job.id} blank slate failed: ${err.message}`);
+    return;
+  }
+  wipedAfter = job.id;
+  drafted = null;
+  sharedChannels = new Set();
+  broadcast("shared-reset", { all: true });
+  if (job.ip_hash && job.ip_hash !== "admin") {
+    let me = null;
+    for (const st of streams.values()) if (st.who === job.ip_hash) send(st.res, "me", me ??= meOf(st.who, st.v));
+  }
+  console.log(`#${job.id} → v${versionId} blank slate: ended ${counts.rules} rules, ${counts.lore} lore, ${counts.schedules} schedules ` +
+    `(${counts.queued} queued runs), cleared ${counts.shared} shared "${forLog(job.text)}"`);
 }
 
 // A finished version's CLEAR SHARED lines: every active item in those channels (this era's only) marked cleared,
@@ -1151,6 +1204,32 @@ async function drawFavicon(force = false) {
   }
 }
 setInterval(() => drawFavicon().catch((err) => console.log(`favicon check failed: ${err.message}`)), 60_000).unref();
+
+// Cache warm-up: once the line is empty after the page changed, the model reads the system prompt and the new page
+// (warmCache in lib/model.mjs), so the next suggestion resumes from the model server's cache inside the page: ~4 s
+// to first text against ~10 s. ~9 s of the model's time per version. A visitor's suggestion stops it (see
+// /api/suggest). Only while the model is loaded, never to wake it. CACHE_WARM=0 turns it off.
+const CACHE_WARM = env.CACHE_WARM !== "0";
+let warming = null;     // the warm-up running: { ac }
+let warmedFor = null;   // the version last warmed (or tried), so each is read once
+async function warmUp() {
+  const busy = () => warming || draining || working || favicon || q.queuedCount.get().n || q.running.get();
+  if (!CACHE_WARM || busy()) return;
+  const cur = q.latest.get();
+  if (!cur || warmedFor === cur.id) return;
+  if (await modelLoaded() !== true || busy()) return;   // asleep (or unknown), or someone came along meanwhile
+  warmedFor = cur.id;
+  warming = { ac: new AbortController() };
+  try {
+    const r = await warmCache(cur.html, { signal: warming.ac.signal });
+    if (warming.ac.signal.aborted) return;   // a suggestion is reading this page now anyway
+    console.log(r.error ? `cache warm-up for v${cur.id} failed: ${forLog(r.error)}`
+      : `cache warmed for v${cur.id} (${r.secs.toFixed(1)} s, ${r.cached ?? "?"}/${r.prompt ?? "?"} cached)`);
+  } finally {
+    warming = null;
+  }
+}
+setInterval(() => warmUp().catch((err) => console.log(`cache warm-up failed: ${err.message}`)), 60_000).unref();
 
 // A cleanup's result is published only if it's smaller and looks exactly like the page before it (two screen sizes,
 // clock and randomness frozen); anything else, or a visitor's suggestion arriving meanwhile, rejects it.
@@ -1482,6 +1561,7 @@ const main = http.createServer(async (req, res) => {
         favicon.ac.abort();
         console.log("favicon drawing stopped for a visitor's suggestion");
       }
+      if (warming && !warming.ac.signal.aborted) warming.ac.abort();
       broadcastState();
       work();
       return json(res, 202, { id: Number(lastInsertRowid) });
@@ -1550,6 +1630,28 @@ const main = http.createServer(async (req, res) => {
         const { lastInsertRowid } = q.insertVersion.run(v.html, null, `restored v${id}`, Buffer.byteLength(v.html), null, Date.now(), v.errors, null);
         broadcastState();
         return json(res, 200, { id: Number(lastInsertRowid) });
+      }
+      // Undoing a blank slate ({ id }: its suggestion): its rules, lore and schedules come back, and the page from
+      // before it is restored as a new version. (Shared items and the earlier-suggestions memory don't come back.)
+      if (path === "/api/admin/unwipe") {
+        const id = Number(body.id);
+        const w = Number.isInteger(id) && db.prepare("SELECT id FROM versions WHERE suggestion_id = ? AND note = 'blank slate'").get(id);
+        if (!w) return json(res, 404, { error: "no blank slate for that suggestion" });
+        const by = `blank slate #${id}`, now = Date.now();
+        const back = (t) => Number(db.prepare(`UPDATE ${t} SET status = 'active', ended_at = NULL, ended_by = NULL WHERE ended_by = ?`).run(by).changes);
+        const out = { rules: back("rules"), lore: back("lore"), schedules: 0 };
+        for (const c of db.prepare("SELECT id, when_spec FROM schedules WHERE ended_by = ?").all(by)) {
+          const when = parseWhen(c.when_spec), next = when && nextRun(when, now);
+          if (next) out.schedules += Number(db.prepare("UPDATE schedules SET status = 'active', next_at = ?, ended_at = NULL, ended_by = NULL WHERE id = ?").run(next, c.id).changes);
+        }
+        const prev = db.prepare("SELECT id FROM versions WHERE id < ? ORDER BY id DESC LIMIT 1").get(w.id);
+        if (prev) {
+          const v = q.versionHtml.get(prev.id);
+          out.version = Number(q.insertVersion.run(v.html, null, `restored v${prev.id}`, Buffer.byteLength(v.html), null, now, v.errors, null).lastInsertRowid);
+        }
+        console.log(`admin: undid blank slate #${id}: ${JSON.stringify(out)}`);
+        broadcastState();
+        return json(res, 200, out);
       }
       if (path === "/api/admin/era") {
         return json(res, 200, { ok: queueEra(true) });

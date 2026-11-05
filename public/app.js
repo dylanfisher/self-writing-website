@@ -214,7 +214,17 @@ const frameSubs = new Set();   // channels the page in the frame asked for (clea
 let sharesInFlight = 0;
 const ITEM_KEY = /^[a-z0-9]{10}$/;
 // Over the WebSocket, else posted (a few at a time) with the stream token.
+// At most FRAME_BURST at once, then FRAME_PER_SEC a second, whatever the page does: the server closes a socket that
+// sends over 30 messages a second (cursors take ~8), and a page whose shim predates its own pacing could flood it.
+// The server's buckets would drop the extra anyway.
+const FRAME_BURST = 16, FRAME_PER_SEC = 14;
+let frameTokens = FRAME_BURST, frameAt = 0;
 function sendShared(path, m) {
+  const now = Date.now();
+  frameTokens = Math.min(FRAME_BURST, frameTokens + (now - frameAt) / 1000 * FRAME_PER_SEC);
+  frameAt = now;
+  if (frameTokens < 1) return;
+  frameTokens -= 1;
   if (liveSend(m)) return;
   if (sharesInFlight >= 4) return;
   const { t, ...rest } = m;

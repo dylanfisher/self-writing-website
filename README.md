@@ -79,6 +79,12 @@ limited by memory bandwidth here. The same 4-bit with MTP on (kept): 16/20, 0 SE
 (~5 tokens accepted per step), the only change that helped. Prefill is the same in all of them (~600 tok/s). Thinking is
 already off, and the SSD prefix cache already on (`~/.omlx/cache`); omlx sets its 4096-token blocks itself for this
 model, and only whole blocks are reused, so a few hundred tokens more of page can mean ~1 s more to first text.
+This model's cache resumes only from snapshots (the end of the system prompt, and every 4096 tokens), so a changed
+page used to mean reading on from the end of the system prompt (~10 s to first text). Now, once the line is empty
+after the page changed, the server has the model read the system prompt and the new page once (`warmCache`, one
+token; logged as `cache warmed for vN`), so the next suggestion resumes from the snapshot inside the page: ~4 s. It
+only helps when the system prompt and page pass 8192 tokens (a page over ~3,600 tokens), costs ~5–9 s of idle model
+time per version, stops for a visitor's suggestion, never wakes the model, and `CACHE_WARM=0` turns it off.
 omlx is built with its native kernels (`brew reinstall omlx --with-custom-kernel`, needs Xcode's Metal Toolchain:
 `xcodebuild -downloadComponent MetalToolchain`); check with `curl -s localhost:8000/api/status` → `custom_kernels`.
 They gave ~2% on the 6-bit model; without them omlx falls back silently.
@@ -114,6 +120,17 @@ the Rules panel; whoever suggested it (same IP) or the admin can remove it (Forg
 got lore written, so a one-line reminder follows the suggestion in every prompt (`LORE_NOTE`). Lore is numbered in the prompt, and a
 suggestion that asks to forget some writes `FORGET LORE: <n>` (at most two), which removes it once that version is
 published. Changes to the page itself (what was added or removed, rules, how scripts work) are not lore.
+
+**Blank slate.** A visitor's suggestion that asks to erase everything and start over ("BLANK SLATE", "delete
+everything, rules too") is done by the server, not the model (`lib/wipe.mjs`). It's caught in two steps: a cheap pattern on the
+text (a wipe verb with "everything"/"all the rules…" or a start-over phrase, and nothing like "except" or "but keep"),
+then a one-word YES/NO call to the model (~0.3 s) that turns down partial wipes ("remove all elements of color"),
+"clear everything and make it red" and questions. On a YES, the first page (`SEED`) becomes a new version (note
+`blank slate`). Every active rule, piece of lore and schedule is ended (`ended_by = 'blank slate #<id>'`), scheduled
+runs already waiting in the queue are taken out, and this era's shared items are cleared. Later prompts leave out
+suggestions from before it as "earlier suggestions". On any doubt or error, the suggestion runs as usual. To undo
+one (admin; shared items and the earlier-suggestions memory don't come back):
+`curl -s -X POST http://127.0.0.1:3000/api/admin/unwipe -H "Authorization: Bearer $(tr -d '\n' < data/admin-token)" -H "Content-Type: application/json" -d '{"id":<suggestion id>}'`
 
 **Eras.** Every `ERA_DAYS` (7) the server queues a suggestion of its own (`kind = 'era'`, shown as "A new week, a new
 era…"; the model gets `ERA_SUGGESTION`): a light tidy-up that keeps the page's character, and a name for the new era
@@ -195,8 +212,16 @@ themselves) and passes in what's there from `GET /api/shared?ch=` and new items 
 from `shared` events. Stored in `shared`, per era and channel: a new era starts empty. Rows are kept: a removal
 marks the row `gone`. A channel keeps its newest 300 active items (what pages get): adding past that marks the
 oldest `evicted` and sends it as a removal. An era holds at most 3000 active items across channels; past that, new
-items are refused (409). Limits: 20 items or removals burst, then 4/s per visitor; 20 channels per era;
-`keep: false` is sent without storing (and can't be removed). The page check echoes shares back as another
+items are refused (409). Limits: 20 items or removals burst, then 4/s per visitor (the shim keeps to that too:
+past it, items are dropped before they're shown and the page gets one error per channel); 20 channels per era;
+`keep: false` is sent without storing (and can't be removed), from its own bucket (16 burst, then 10/s), and the
+shim paces them: at most one every 125 ms leaves the page, the newest per channel (the page's own callbacks still
+get each at once). The shell also caps what a page sends at 16, then 14/s, below the socket's limit.
+**Movement** is shared by default (prompt): motion worked out from `SITE.time()` when it can be; else
+`keep: false` positions sent every 200 ms, eased toward on the other screens. For one thing everyone sees,
+`SITE.host()` picks the page that runs it: the longest-here visitor on the same version whose pointer moved
+lately (else the longest here), or this page when it can't tell. The page check sweeps the pointer over the page
+(made-up move events) and fails a page whose move handlers store items (#463 stored one per mousemove). The page check echoes shares back as another
 visitor's items and removes them a moment later, and echoes removals, so both callbacks run. Admin:
 `POST /api/admin/shared/clear` with `{ch}`, `{visitor}`, both or neither (this era; marks rows `removed`, and pages
 using the channel reload).
