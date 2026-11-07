@@ -34,7 +34,8 @@ button { font: inherit; color: inherit; }
 .top { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--line);
   flex: none; background: var(--bg); }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 600;
-  letter-spacing: -.01em; white-space: nowrap; margin-right: auto; }
+  letter-spacing: -.01em; white-space: nowrap; }
+.brand:not(:has(+ .tps:not([hidden]))) { margin-right: auto; }
 .warn { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--amber-text); background: var(--amber-bg);
   border: 1px solid var(--amber-line); border-radius: 999px; padding: 4px 12px; min-width: 0; }
 .warn { position: relative; cursor: pointer; white-space: nowrap; font-weight: 500; flex: none; font-family: inherit; line-height: inherit; }
@@ -45,12 +46,25 @@ button { font: inherit; color: inherit; }
 .help-warn { color: var(--amber-text); background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: 8px;
   padding: 8px 10px; font-size: 12px; line-height: 1.5; }
 
+.tps { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
+  white-space: nowrap; font-variant-numeric: tabular-nums; margin-left: -6px; margin-right: auto; flex: none; }
 .viewers { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); white-space: nowrap;
   font-variant-numeric: tabular-nums; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: none;
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 50%, transparent); animation: live 2s infinite; }
 @keyframes live { 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+/* Something just went out to everyone (a shared item added or removed, a reaction): gray at rest; app.js adds .on
+   to light it blue and ripple its waves for a moment. */
+.bcast-wrap { display: flex; flex: none; margin-right: 2px; cursor: default; }
+.bcast { color: var(--faint); }
+.bcast path { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
+.bcast.on { animation: bcast 1.6s ease-out both; }
+.bcast.on .w1 { animation: bcast-wave 1.6s ease-out both; }
+.bcast.on .w2 { animation: bcast-wave 1.6s ease-out .12s both; }
+@keyframes bcast { 0%, 60% { color: var(--blue); } 100% { color: var(--faint); } }
+@keyframes bcast-wave { 0% { opacity: 0; } 15% { opacity: 1; } 55% { opacity: .35; } 100% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .bcast.on .w1, .bcast.on .w2 { animation: none; } }
 
 .help { position: relative; }
 .help-btn { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line-strong); background: var(--bg);
@@ -80,9 +94,15 @@ button { font: inherit; color: inherit; }
 .badge.draft .dot { animation: blink 1s infinite; }
 @media (prefers-reduced-motion: reduce) { .badge.draft .dot { animation: none; } }
 .viewing-suggestion { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-.frame-wrap { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff;
+.frame-wrap { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; background: #fff;
   box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04); }
 iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+.sound-tip { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--amber-line); border-radius: 10px; background: var(--amber-bg);
+  color: var(--amber-text); font-size: 13px; line-height: 1.4; box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+.sound-tip[hidden] { display: none; }
+.sound-tip span { flex: 1; min-width: 0; }
+.sound-tip .btn { flex: none; }
 .scrub { display: flex; align-items: center; gap: 8px; }
 .scrub input { flex: 1; min-width: 0; accent-color: var(--primary); height: 28px; }
 #play .i-pause, #play.playing .i-play { display: none; }
@@ -235,6 +255,30 @@ iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff;
   transition: opacity .4s; filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)); }
 .remote-cursors .rc.gone { opacity: 0; }
 
+/* ---------- the react button: its smiley lights up yellow with each reaction, in fast and out slowly ---------- */
+@keyframes react-face { 0% { fill: transparent; animation-timing-function: ease-out; }
+  7% { fill: #fde047; animation-timing-function: ease-out; } 100% { fill: transparent; } }
+@keyframes react-ink { 0% { color: inherit; animation-timing-function: ease-out; }
+  7% { color: #a16207; animation-timing-function: ease-out; } 100% { color: inherit; } }
+.react-btn svg circle:first-child { fill: transparent; }
+.react-btn.lit svg { animation: react-ink 1.2s both; }
+.react-btn.lit svg circle:first-child { animation: react-face 1.2s both; }
+
+/* ---------- the react button's menu ---------- */
+.react-menu { position: fixed; z-index: 50; display: flex; flex-wrap: wrap; gap: 6px; width: max-content;
+  max-width: min(360px, calc(100vw - 32px)); padding: 8px; border-radius: 12px; background: var(--bg);
+  border: 1px solid var(--line); box-shadow: 0 12px 40px rgba(0,0,0,.16); }
+.react-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); color: var(--text); font: 500 14px var(--sans); padding: 5px 11px; cursor: pointer;
+  white-space: nowrap; transition: background .15s, transform .1s; }
+.react-chip:hover { background: var(--hover); }
+.react-chip:active { transform: scale(.94); }
+.react-chip:disabled { opacity: .45; cursor: default; transform: none; }
+.react-menu.row { flex-wrap: nowrap; max-width: calc(100vw - 32px); padding: 5px; gap: 5px; overflow-x: auto;
+  scrollbar-width: none; overscroll-behavior: contain; box-shadow: 0 3px 14px rgba(0,0,0,.1); }
+.react-menu.row::-webkit-scrollbar { display: none; }
+.react-menu.row .react-chip { font-size: 13px; padding: 4px 10px; flex: none; }
+
 /* ---------- full-page mode: just the built page ---------- */
 .focus-pill { position: fixed; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10; display: flex;
   align-items: center; gap: 10px; padding: 6px 6px 6px 12px; border-radius: 999px; font-size: 12px; color: var(--muted);
@@ -265,7 +309,7 @@ body.focus .frame-wrap { border: 0; border-radius: 0; box-shadow: none; }
   .suggest textarea { font-size: 16px; }   /* stops iOS zooming in on focus */
   .btn.small { height: 34px; }
   .btn.icon-btn { min-width: 38px; }
-  .focus-btn .lbl, #focus-btn .lbl { display: none; }
+  .focus-btn .lbl, #focus-btn .lbl, #react-btn .lbl { display: none; }
   .history li .tag.when { display: none; }
   .history li button.row { grid-template-columns: 3.4em minmax(0, 1fr); padding: 9px 8px; }
   .history .restore { margin-left: 8px; }

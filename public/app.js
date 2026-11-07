@@ -151,6 +151,27 @@ addEventListener("message", (e) => {
   else frameExact = e.data.exact === true;
 });
 
+// ---------- sound tip, for phones and tablets ----------
+// The frame's shim says { srp: "audio" } when the page first makes sound (an AudioContext). On a touch device we
+// say how to hear it, once per visit, until they press "Got it". Sound needs a tap on the page (each new version
+// is a new page), and on iPhone and iPad the silent switch or Control Centre's bell can mute it. Any page could
+// send the message; at worst the tip shows without sound.
+const touchOnly = matchMedia("(hover: none) and (pointer: coarse)").matches;
+const apple = /iP(hone|ad|od)/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+let soundTipShown = false, soundTipTimer = null;
+function hideSoundTip() { clearTimeout(soundTipTimer); $("sound-tip").hidden = true; }
+$("sound-tip-close").addEventListener("click", () => { store.set("srp-sound-tip", true); hideSoundTip(); });
+addEventListener("message", (e) => {
+  if (e.source !== $("frame").contentWindow || e.data?.srp !== "audio") return;
+  if (!touchOnly || soundTipShown || store.get("srp-sound-tip", false)) return;
+  soundTipShown = true;
+  $("sound-tip-text").textContent = apple
+    ? "This page has sound. Tap the page to start it. No sound? Turn off Silent Mode (the switch on the side of an iPhone, or the bell in Control Centre) and turn the volume up."
+    : "This page has sound. Tap the page to start it. No sound? Check your device isn't on silent and turn the volume up.";
+  $("sound-tip").hidden = false;
+  soundTipTimer = setTimeout(hideSoundTip, 20_000);
+});
+
 // ---------- other visitors' cursors ----------
 // The frame's shim reports where our pointer is on the page ({ srp: "pointer" }); we post it with what we're
 // looking at (cursorKey) to the server, which sends every page the cursors on the same one ("cursors" events).
@@ -250,11 +271,24 @@ addEventListener("message", async (e) => {
   } else if (d.srp === "share" && me && streamWorks && (d.key == null || ITEM_KEY.test(d.key))) {
     // No key: a page from before keys (its shim was cached); the server makes one.
     sendShared("/api/share", { t: "share", ch, data: d.data, keep: d.keep !== false, key: d.key ?? undefined, k: cursorKey });
+    if (d.keep !== false) flashBroadcast();
   } else if (d.srp === "unshare" && me && streamWorks && ITEM_KEY.test(d.key)) {
     sendShared("/api/unshare", { t: "unshare", ch, key: d.key });
+    flashBroadcast();
   }
 });
+// The signal by "here now": lights for a moment whenever something goes out to everyone (a stored shared item added
+// or removed, ours or anyone's, or a reaction). Not keep: false items (id 0): that's movement, many a second.
+// Taking the class off and back on starts it over, so a burst keeps it lit.
+function flashBroadcast() {
+  const b = $("bcast");
+  if (!b || document.hidden) return;
+  b.classList.remove("on");
+  void b.getBoundingClientRect();
+  b.classList.add("on");
+}
 function takeShared(m) {
+  if (typeof m?.removed === "string" || m?.item?.id) flashBroadcast();
   if (!frameSubs.has(m.ch)) return;
   const out = typeof m.removed === "string" ? { srp: "shared", ch: m.ch, removed: m.removed } : { srp: "shared", ch: m.ch, item: markMine(m.item) };
   $("frame").contentWindow?.postMessage(out, "*");
@@ -733,8 +767,19 @@ function render() {
   renderMine();
   $("admin-badge").hidden = !admin;
   renderViewers();
+  renderSpeed();
   if (S.model) $("help-model").textContent = S.model.replace(/-MLX.*$/i, "");
   setupTurnstile();
+}
+
+function renderSpeed() {
+  const t = S?.tps, g = S?.genTps;
+  const fmt = (n) => String(n >= 10 ? Math.round(n) : n);
+  $("tps").hidden = !t;
+  if (!t) return;
+  $("tps").textContent = g ? `${fmt(t)} avg · ${fmt(g)} raw tok/s` : `${fmt(t)} tok/s`;
+  $("tps").title = "Tokens per second over the last 20 suggestions. avg: from sending the prompt to the last token " +
+    "(includes reading the prompt and retries)." + (g ? " raw: writing only, from the first token to the last." : "");
 }
 
 function renderViewers() {
@@ -864,7 +909,7 @@ addEventListener("keydown", (e) => {
   if (e.key === "End") show(latestId());
   if (e.key === "p" || e.key === "P") playing ? stopPlay() : startPlay();
   if (e.key === "f" || e.key === "F") setFocus(!document.body.classList.contains("focus"));
-  if (e.key === "Escape") { setFocus(false); setHelp(false); }
+  if (e.key === "Escape") { if (!$("react-menu").hidden) { setReactMenu(null); return; } setFocus(false); setHelp(false); }
 });
 
 // ---------- suggesting ----------
@@ -1021,6 +1066,97 @@ function applyState(next) {
   render();
   sendSite();
   if ((S.ideas ?? []).join("\n") !== ideasSig) { ideasSig = (S.ideas ?? []).join("\n"); nextIdea(); }
+  renderReactions();
+}
+
+// ---------- reactions: the react button (beside Full page, and in the full-page pill) ----------
+// A menu of short messages anyone here can send to everyone: a greeting plus a few the model writes after each
+// version (S.reactions: { id, list }, see "reactions" in server.mjs). We send one by its number in the set, never
+// its text, and show our own at once; others' come as "react" events. Both go into the frame, where the shim
+// floats them up over the page and passes them to SITE.on("react"). Model text: chips are set with textContent.
+// Needs a live connection (its token); a polling page has no button.
+let reactSig = "";
+const REACT_BURST = 5, REACT_PER_SEC = 0.6;   // as on the server, so a tap past it isn't silently dropped there
+let reactTokens = REACT_BURST, reactAt = 0;
+const reactBtns = () => [$("react-btn"), $("react-pill-btn")];
+function renderReactions() {
+  const r = S?.reactions, ok = !!(r?.list?.length && me && streamWorks);
+  for (const b of reactBtns()) b.hidden = !ok;
+  if (!ok) { setReactMenu(null); return; }
+  const sig = `${r.id}:${r.list.join("\n")}`;
+  if (sig === reactSig) return;
+  reactSig = sig;
+  $("react-menu").replaceChildren(...r.list.slice(0, 9).map((t, i) => {
+    const b = h("button", { class: "react-chip", type: "button", role: "menuitem", title: "Send to everyone here",
+      onclick: () => sendReaction(i) }, String(t));
+    return b;
+  }));
+  // A new set while the menu is open: it's a different size now, so line it up with its button again.
+  const open = !$("react-menu").hidden && reactBtns().find((b) => b.getAttribute("aria-expanded") === "true");
+  if (open) setReactMenu(open);
+}
+function setReactMenu(from) {
+  const menu = $("react-menu");
+  menu.hidden = !from;
+  for (const b of reactBtns()) b.setAttribute("aria-expanded", String(b === from));
+  if (!from) return;
+  // From the page bar: one row above the button, over the header, so the page stays in view (it scrolls
+  // sideways when it doesn't fit). From the full-page pill, at the bottom: above it, wrapped. Right edges lined up.
+  const row = from === $("react-btn");
+  menu.classList.toggle("row", row);
+  const r = from.getBoundingClientRect(), m = menu.getBoundingClientRect();
+  const left = Math.max(16, Math.min(r.right - m.width, innerWidth - 16 - m.width));
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(Math.max(4, r.top - (row ? 10 : 6) - m.height))}px`;
+}
+for (const b of reactBtns()) b.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setReactMenu($("react-menu").hidden ? b : null);
+});
+document.addEventListener("click", (e) => {
+  if (!$("react-menu").hidden && !e.target.closest?.("#react-menu")) setReactMenu(null);
+});
+addEventListener("resize", () => setReactMenu(null));
+function sendReaction(i) {
+  const r = S?.reactions, t = r?.list?.[i];
+  if (t === undefined || !me || !streamWorks) return;
+  const now = Date.now();
+  reactTokens = Math.min(REACT_BURST, reactTokens + (now - reactAt) / 1000 * REACT_PER_SEC);
+  reactAt = now;
+  if (reactTokens < 1) { pauseChips((1 - reactTokens) / REACT_PER_SEC * 1000); return; }
+  reactTokens -= 1;
+  if (reactTokens < 1) pauseChips((1 - reactTokens) / REACT_PER_SEC * 1000);
+  const m = { t: "react", set: r.id, i };
+  if (!liveSend(m)) {
+    fetch("/api/react", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: me.token, set: r.id, i }) }).catch(() => {});
+  }
+  showReaction({ id: me.id, by: meInfo?.id ?? "", text: t, at: now, mine: true });
+}
+let chipsTimer = null;
+function pauseChips(ms) {
+  for (const c of $("react-menu").children) c.disabled = true;
+  clearTimeout(chipsTimer);
+  chipsTimer = setTimeout(() => { for (const c of $("react-menu").children) c.disabled = false; }, Math.min(5000, ms));
+}
+// The smiley on the react buttons lights up yellow with each reaction (ours or anyone's): in fast, out slowly
+// (.lit in app.css). Taking the class off and back on starts it over, so a burst keeps it lit. A CSS animation, not
+// element.animate(): that one doesn't animate an SVG's fill in every browser.
+function flashReact() {
+  for (const b of reactBtns()) {
+    if (b.hidden) continue;
+    b.classList.remove("lit");
+    void b.offsetWidth;   // so the browser sees the class come back as a new animation
+    b.classList.add("lit");
+  }
+}
+// Into the frame (a page still loading misses it; it's a passing thing).
+function showReaction(r) {
+  if (document.hidden) return;
+  flashReact();
+  flashBroadcast();
+  if (!$("frame").src) return;
+  $("frame").contentWindow?.postMessage({ srp: "react", r }, "*");
 }
 
 // The suggestion box's placeholder: the model's ideas for the newest version, a new one after every suggestion
@@ -1074,6 +1210,7 @@ const handlers = {
   hello(d) {
     me = d; cursorKey = null; cursorsData = null; syncCursorKey();
     if (me.me) { meInfo = me.me; sendSite(); }
+    if (S) renderReactions();
   },
   me(d) { meInfo = d; sendSite(); },
   people(d) { if (S) { S.people = d.people; sendSite(); } },
@@ -1081,6 +1218,11 @@ const handlers = {
   shared(d) { takeShared(d); },
   "shared-reset"(d) { sharedReset(d); },
   "chrome-cursors"(d) { chromeData = d; renderChromeCursors(); },
+  react(d) {
+    if (!d || typeof d.text !== "string") return;
+    showReaction({ id: String(d.id ?? ""), by: String(d.by ?? ""), text: d.text, at: +d.at || Date.now(),
+      mine: !!meInfo?.id && d.by === meInfo.id });
+  },
   state(d) { applyState(d); },
   viewers(d) { if (S) { S.viewers = d.viewers; renderViewers(); sendSite(); } },
   draft(d) { takeDraft(d); },

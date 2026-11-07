@@ -13,8 +13,9 @@
   <a class="brand" href="/">
     <span>This page rewrites itself</span>
   </a>
+  <span id="tps" class="tps" hidden></span>
   <span id="admin-badge" class="admin-badge" hidden>Admin <button id="admin-logout" class="link" type="button">Sign out</button></span>
-  <span id="viewers" class="viewers" hidden><span class="live-dot" aria-hidden="true"></span><span id="viewers-n"></span><span class="viewers-lbl"> here now</span></span>
+  <span id="viewers" class="viewers" hidden><span class="bcast-wrap" title="Lights up when something is sent to everyone here: a reaction, or something added to or removed from the page for all"><svg id="bcast" class="bcast" viewBox="0 0 16 12" width="16" height="12" aria-hidden="true"><circle cx="8" cy="6" r="1.6" fill="currentColor"/><path class="w1" d="M5.2 3.2a4 4 0 0 0 0 5.6M10.8 3.2a4 4 0 0 1 0 5.6"/><path class="w2" d="M2.8 1a7.2 7.2 0 0 0 0 10M13.2 1a7.2 7.2 0 0 1 0 10"/></svg></span><span class="live-dot" aria-hidden="true"></span><span id="viewers-n"></span><span class="viewers-lbl"> here now</span></span>
   <div class="help">
     <button id="help-btn" class="warn" type="button" aria-label="AI-written. What is this?" aria-expanded="false" aria-controls="help-box"><span class="dot" aria-hidden="true"></span>AI-written<svg class="caret" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <div id="help-box" class="help-box" role="dialog" aria-label="About this site" hidden>
@@ -39,6 +40,11 @@
       <span id="viewing" class="viewing"></span>
       <span id="viewing-suggestion" class="viewing-suggestion"></span>
       <button id="to-latest" class="btn small" type="button" hidden>Back to latest</button>
+      <button id="react-btn" class="btn small icon-btn react-btn" type="button" title="Send a reaction to everyone here"
+        aria-label="Send a reaction" aria-haspopup="true" aria-expanded="false" hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.9" cy="6.6" r=".95" fill="currentColor"/><circle cx="10.1" cy="6.6" r=".95" fill="currentColor"/><path d="M5.2 9.4c.7 1.2 1.6 1.8 2.8 1.8s2.1-.6 2.8-1.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="lbl">React</span>
+      </button>
       <button id="focus-btn" class="btn small icon-btn" type="button" title="Hide controls (F)" aria-label="Hide controls">
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
         <span class="lbl">Full page</span>
@@ -46,7 +52,11 @@
     </div>
     <div class="frame-wrap">
       <!-- Scripts only, opaque origin: no forms, popups, top navigation or same-origin access. -->
-      <iframe id="frame" title="Current version of the page" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+      <iframe id="frame" title="Current version of the page" sandbox="allow-scripts" referrerpolicy="no-referrer" allow="autoplay"></iframe>
+      <div id="sound-tip" class="sound-tip" role="status" hidden>
+        <span id="sound-tip-text"></span>
+        <button id="sound-tip-close" class="btn small" type="button">Got it</button>
+      </div>
     </div>
     <div class="scrub" data-cz="scrub">
       <button id="play" class="btn small icon-btn" type="button" aria-label="Play through every version" title="Play (P)">
@@ -180,7 +190,11 @@
 <div id="focus-pill" class="focus-pill" role="note" hidden>
   <span class="dot" aria-hidden="true"></span>
   <span class="pill-txt">AI-written page. Never enter personal info.</span>
+  <button id="react-pill-btn" class="btn small icon-btn react-btn" type="button" title="Send a reaction to everyone here"
+    aria-label="Send a reaction" aria-haspopup="true" aria-expanded="false" hidden><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5.9" cy="6.6" r=".95" fill="currentColor"/><circle cx="10.1" cy="6.6" r=".95" fill="currentColor"/><path d="M5.2 9.4c.7 1.2 1.6 1.8 2.8 1.8s2.1-.6 2.8-1.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
   <button id="unfocus-btn" class="btn small" type="button">Show controls</button>
 </div>
+<!-- The react button's menu: model-written reactions, set with textContent (app.js). -->
+<div id="react-menu" class="react-menu" role="menu" aria-label="Reactions" hidden></div>
 </body>
 </html>

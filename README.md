@@ -132,6 +132,16 @@ suggestions from before it as "earlier suggestions". On any doubt or error, the 
 one (admin; shared items and the earlier-suggestions memory don't come back):
 `curl -s -X POST http://127.0.0.1:3000/api/admin/unwipe -H "Authorization: Bearer $(tr -d '\n' < data/admin-token)" -H "Content-Type: application/json" -d '{"id":<suggestion id>}'`
 
+**Revert.** A suggestion that is only a revert is done by the server too (`parseRevert` in `server.mjs`): "revert" /
+"undo (that, the last change…)" undoes the latest version, "undo the last 3 edits" that many, and "revert to v580" /
+"go back to v12" brings that version back ("undo v80" isn't one: that goes to the model). The old page comes back as a
+new version noted `revert v<earliest undone>`, so another "undo" right after goes one further back. Rules, lore and
+schedules made by the undone versions' suggestions are ended (`ended_by = 'revert #<id>'`), and rules and lore they
+ended come back.
+
+**Unfinished suggestions.** `/api/suggest` turns down text that stops mid-thought (ends on "the", "and", "my"…, or is
+"make all" / "add some"), since Enter sends; the box keeps the text.
+
 **Eras.** Every `ERA_DAYS` (7) the server queues a suggestion of its own (`kind = 'era'`, shown as "A new week, a new
 era…"; the model gets `ERA_SUGGESTION`): a light tidy-up that keeps the page's character, and a name for the new era
 (`ERA: <name>`). Era 1 is the site's start. History marks where each era begins, and every prompt says which era it
@@ -197,6 +207,17 @@ page the cursors on the same one, batched every 120 ms, at most 30.
 Mouse and pen only; none while polling (quick tunnels). Sandbox URLs carry the shim's hash (`&s=`) because version
 pages are cached forever with the shim inlined.
 
+**Reactions.** A React button beside Full page (and in the full-page pill) opens a menu of short messages
+anyone here can send to everyone: a fixed `👋 hi` plus five the model writes in the same call as the placeholder
+ideas after each version (`lib/ideas.mjs`: the page, the latest change, how many are here, the previous set and
+which of it people sent; the call takes ~5 s and nothing waits on it). The state carries `reactions: {id, list}`.
+A page sends one by its number in the set (`{t: "react", set, i}`, or `/api/react`), never its text, so visitors
+can only send what the server offered; the previous set is still accepted for 15 s, and each visitor may send 5
+at once, then one every ~1.7 s. The server relays it to every other live page (`react` events: `{id, by, text,
+at}`); nothing is stored. The shim floats it up over the page from the sender's pointer if it's on this page (else
+near the bottom), in their color, and calls `SITE.on("react", fn)` with `{text, by, hue, mine, x, y, at}`; the page
+check sends one made-up reaction. Model text: set with `textContent` in the shell and in the shim.
+
 **Shared items (multiplayer).** `SITE.share(channel, data, {keep})` adds something every visitor sees;
 `SITE.shared(channel, onAdd, onRemove)` calls `onAdd(item)` for each item already there and then each new one, and
 `onRemove(item)` for each one removed (`item: {key, data, by, hue, at, mine}`, plus data's keys: `item.x`).
@@ -228,8 +249,8 @@ using the channel reload).
 
 **Live connection.** Each open page holds one: a WebSocket (`/api/ws`, using `ws`) when it gets through, else an
 event stream (`/api/events`), else polling `/api/state` every 3 s. Both connections get the same events. Over a
-WebSocket the page also sends its cursor and shared items (`{t: "cursor" | "share" | "unshare", …}`); an
-event-stream page posts them to `/api/cursor`, `/api/share` and `/api/unshare` with the token from its `hello`. The upgrade only accepts
+WebSocket the page also sends its cursor, shared items and reactions (`{t: "cursor" | "share" | "unshare" | "react", …}`); an
+event-stream page posts them to `/api/cursor`, `/api/share`, `/api/unshare` and `/api/react` with the token from its `hello`. The upgrade only accepts
 `Origin: MAIN_ORIGIN` (no CORS check guards WebSockets), messages are capped at 2 KB and 30 a second (more closes
 the socket with 1008), and the server pings every 25 s (Cloudflare drops a socket idle for 100 s). On a reload
 or stop, sockets are closed with 1012 and pages reconnect after a random 0.2–2 s.
@@ -250,7 +271,7 @@ newest 250 versions and loads older ones in pages; the slider always covers all 
 | `lib/check.mjs` | runs a page in headless Chromium (sandbox CSP, no network) and reports JS errors, freezes and element leaks (a page that keeps adding elements, confirmed by fast-forwarding its timers 30 s) |
 | `scripts/profile-page.mjs` | `node scripts/profile-page.mjs <url> [seconds]`: fps per frame, long tasks, DOM size and the hottest JS functions, for finding what slows a page down |
 | `scripts/check-versions.mjs` | re-checks stored versions and marks broken ones (⚠ in History) |
-| `lib/shim.js` | added to every sandbox page: storage stand-in, one shared `AudioContext` per page (resumed on the first click or key), `window.SITE` (read-only: writes throw), in-place patching of live drafts, cursors, shared items |
+| `lib/shim.js` | added to every sandbox page: storage stand-in, one shared `AudioContext` per page (resumed on each tap, click or key unless the page suspended it; iOS: plays through the silent switch, recovers from "interrupted"; tells the shell, which shows touch devices a sound tip), `window.SITE` (read-only: writes throw), in-place patching of live drafts, cursors, shared items, reactions |
 | `lib/shared.mjs` | checks the data of shared items (`SITE.share`) on the server; the shim checks the same |
 | `scripts/test-shim.mjs` / `scripts/test-shim-history.mjs` | tests the patching and cursors; replays real version pairs through it |
 | `scripts/bench-model.mjs` | times the model on the latest page (first text, tokens/s), for comparing model-server settings |

@@ -264,6 +264,10 @@ const DB_ID = db.prepare("SELECT value FROM meta WHERE key = 'db_id'").get().val
 if (!db.prepare("SELECT 1 FROM pragma_table_info('suggestions') WHERE name = 'tokens'").get()) {
   db.exec("ALTER TABLE suggestions ADD COLUMN tokens INTEGER; ALTER TABLE suggestions ADD COLUMN secs REAL");
 }
+// Of secs, the time spent writing after the first text (without reading the prompt): the raw generation speed.
+if (!db.prepare("SELECT 1 FROM pragma_table_info('suggestions') WHERE name = 'gen_secs'").get()) {
+  db.exec("ALTER TABLE suggestions ADD COLUMN gen_secs REAL");
+}
 const stats = makeStats(db);
 db.prepare("UPDATE suggestions SET status = 'failed', error = 'interrupted by a server restart', finished_at = ? WHERE status = 'running'")
   .run(Date.now());
@@ -340,12 +344,19 @@ const q = {
     WHERE s.ip_hash != ? AND s.id < ? AND s.id > ? AND s.status = 'done' ORDER BY s.id DESC LIMIT ?`),
   start: db.prepare("UPDATE suggestions SET status = 'running', started_at = ? WHERE id = ?"),
   finish: db.prepare("UPDATE suggestions SET status = ?, error = ?, version_id = ?, finished_at = ? WHERE id = ?"),
-  usage: db.prepare("UPDATE suggestions SET tokens = ?, secs = ? WHERE id = ?"),
+  usage: db.prepare("UPDATE suggestions SET tokens = ?, secs = ?, gen_secs = ? WHERE id = ?"),
   // For SITE.me and SITE.stats (see "window.SITE" below).
   myDone: db.prepare("SELECT text, version_id, finished_at FROM suggestions WHERE ip_hash = ? AND status = 'done' ORDER BY created_at DESC LIMIT 5"),
   myCounts: db.prepare("SELECT COUNT(*) AS n, MIN(created_at) AS first FROM suggestions WHERE ip_hash = ? AND status = 'done'"),
   doneSince: db.prepare("SELECT COUNT(*) AS n FROM suggestions WHERE finished_at >= ? AND +status = 'done'"),
   doneAll: db.prepare("SELECT COUNT(*) AS n FROM suggestions WHERE status = 'done'"),
+  // Average writing speed over the last 20 suggestions the model wrote anything for (tokens over seconds, so
+  // long ones weigh more; seconds include reading the prompt and any retries).
+  speed: db.prepare(`SELECT SUM(tokens) AS tokens, SUM(secs) AS secs FROM
+    (SELECT tokens, secs FROM suggestions WHERE tokens > 0 AND secs > 0 ORDER BY id DESC LIMIT 20)`),
+  // The same, counting only the time after the first text: the model's raw generation speed.
+  genSpeed: db.prepare(`SELECT SUM(tokens) AS tokens, SUM(gen_secs) AS secs FROM
+    (SELECT tokens, gen_secs FROM suggestions WHERE tokens > 0 AND gen_secs > 0 ORDER BY id DESC LIMIT 20)`),
   born: db.prepare("SELECT created_at FROM versions ORDER BY id LIMIT 1"),
   insertVersion: db.prepare("INSERT INTO versions (html, suggestion_id, note, bytes, secs, created_at, errors, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
   remove: db.prepare("UPDATE suggestions SET status = 'removed', finished_at = ? WHERE id = ? AND status = 'queued'"),
@@ -440,6 +451,9 @@ function siteStats() {
   siteStatsOf = { at: Date.now(), v };
   return v;
 }
+const perSecond = (r) => r?.secs ? Math.round(r.tokens / r.secs * 10) / 10 : null;
+const tokensPerSecond = () => perSecond(q.speed.get());
+const genTokensPerSecond = () => perSecond(q.genSpeed.get());
 const SERVER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 let lastViewers = -1;
 function broadcastViewers() {
@@ -479,6 +493,7 @@ function state(historyLimit = HISTORY_PAGE) {
     schedules: schedulesForState(),
     schedulesMax: SCHEDULES_MAX,
     ideas,
+    reactions,
     favicon: faviconUrl(),
     build: build(),
     shim: SHIM_HASH,   // in sandbox URLs: version pages are cached for good, with the shim inlined
@@ -486,6 +501,8 @@ function state(historyLimit = HISTORY_PAGE) {
     viewers: viewers(),
     people: people(),
     stats: siteStats(),
+    tps: tokensPerSecond(),
+    genTps: genTokensPerSecond(),
     now: Date.now(),   // the server's clock (SITE.time()), and its timezone
     tz: SERVER_TZ,
     drafted,
@@ -629,10 +646,11 @@ function newSharedEra() {
 }
 setInterval(() => { const t = Date.now() - 60_000; for (const [h, b] of shareBuckets) if (b.at < t) shareBuckets.delete(h); }, 60_000).unref();
 // One from the visitor's bucket (live: the one for keep: false items); false if it's empty.
-function takeShareToken(s, now, live = false) {
-  const id = live ? `${s.who}:live` : s.who, burst = live ? LIVE_BURST : SHARE_BURST;
+const takeShareToken = (s, now, live = false) =>
+  live ? takeToken(`${s.who}:live`, now, LIVE_BURST, LIVE_PER_SEC) : takeToken(s.who, now, SHARE_BURST, SHARE_PER_SEC);
+function takeToken(id, now, burst, perSec) {
   const b = shareBuckets.get(id) ?? { n: burst, at: now };
-  b.n = Math.min(burst, b.n + (now - b.at) / 1000 * (live ? LIVE_PER_SEC : SHARE_PER_SEC));
+  b.n = Math.min(burst, b.n + (now - b.at) / 1000 * perSec);
   b.at = now;
   shareBuckets.set(id, b);
   if (b.n < 1) return false;
@@ -766,6 +784,16 @@ async function work() {
       progress = { id: job.id, stage: "writing", chars: 0, expected: job.kind === "era" ? 4000 : 1500, tail: "", end: 0, reply: 0, steps: [], rule: null, lore: null, schedule: null, draft: null, draftBlocks: 0 };
       draftOf = { base: null, blocks: 0 };
       draftVersion = cur;
+      // "revert" / "undo": the server puts the page before the last change back, instead of the model rebuilding it
+      // from memory (#684 took 30 s, #687 failed four times) and leaving that change's rule active (r31).
+      const revert = !job.kind && parseRevert(job.text);
+      if (revert) {
+        revertLast(job, revert);
+        progress = null;
+        broadcastState();
+        refreshIdeas();
+        continue;
+      }
       // "Delete everything, start over": done at once by the server, not edit by edit (see lib/wipe.mjs).
       if (!job.kind && looksLikeWipe(job.text) && await confirmWipe(job.text)) {
         blankSlate(job);
@@ -863,7 +891,7 @@ async function work() {
         interruptible = null;
       }
       const now = Date.now();
-      q.usage.run(r.tokens ?? null, r.secs ?? null, job.id);
+      q.usage.run(r.tokens ?? null, r.secs ?? null, r.genSecs ?? null, job.id);
       // The raw reply of every attempt when there was more than one (failed ones, then the accepted one), for working
       // out why the model went wrong. Never served.
       if (r.tries?.length) {
@@ -887,6 +915,12 @@ async function work() {
         if (!job.kind && r.rules?.schedule && parseWhen(r.rules.schedule.when)) r.rules = { ...r.rules, add: null, lore: null };
         // A cleanup changes nothing but the code.
         if (cleanup) r.rules = null;
+        // "rule: …" from a visitor and no rule line in the reply (#680, #682): the visitor's words are the rule.
+        const asked = !job.kind && RULE_ASK.exec(job.text);
+        if (asked && !r.rules?.add && !r.rules?.change && !r.rules?.end?.length && !r.rules?.schedule) {
+          const text = asked[1].split(/\s+/).slice(0, 20).join(" ");
+          if (text) r.rules = { ...(r.rules ?? { end: [], forget: [], unschedule: [], clear: [] }), add: text };
+        }
         const ruleNote = applyRuleChanges(r.rules, rules, job, Number(lastInsertRowid), now);
         if (ruleNote) console.log(`#${job.id} rules: ${forLog(ruleNote)}`);
         // An era's own LORE line only restates the era, which every prompt already gives.
@@ -925,9 +959,9 @@ async function work() {
 const firstNote = (f) => f?.ttft == null ? "" :
   ` · first text ${f.ttft.toFixed(1)} s${f.prompt ? `, ${f.cached ?? "?"}/${f.prompt} cached` : ""}`;
 
-// ---------- placeholder ideas for the suggestion box ----------
-// Written by the model after each new version (a short call, ~3 s, alongside the next rewrite; never waited on).
-// If versions arrive faster than that, it catches up with the newest one when it's done.
+// ---------- placeholder ideas for the suggestion box, and the reactions for the react button ----------
+// Written by the model after each new version (a short call, ~5 s, alongside the next rewrite; never waited on).
+// If versions arrive faster than that, it catches up with the newest one when it's done. See "reactions" for those.
 let ideas = [], ideasFor = null, ideasBusy = false;
 async function refreshIdeas() {
   const cur = q.latest.get();
@@ -936,9 +970,13 @@ async function refreshIdeas() {
   try {
     const last = db.prepare("SELECT s.text FROM versions v JOIN suggestions s ON s.id = v.suggestion_id WHERE v.id = ?").get(cur.id)?.text ?? null;
     const recent = db.prepare("SELECT text FROM suggestions ORDER BY id DESC LIMIT 20").all().map((r) => r.text);
-    const fresh = await makeIdeas(cur.html, last, recent);
+    const sent = [...reactSent].sort((a, b) => b[1] - a[1]);
+    const fresh = await makeIdeas(cur.html, last, recent, { viewers: viewers(), reactions: reactions.list.slice(1), sent });
     ideasFor = cur.id;
-    if (fresh.length) { ideas = fresh; broadcastState(); }
+    let changed = false;
+    if (fresh.ideas.length) { ideas = fresh.ideas; changed = true; }
+    if (fresh.reactions.length >= REACTIONS_MIN) { newReactions(fresh.reactions); changed = true; }
+    if (changed) broadcastState();
   } finally {
     ideasBusy = false;
   }
@@ -1029,7 +1067,7 @@ function blankSlate(job) {
       queued: Number(db.prepare("UPDATE suggestions SET status = 'removed', finished_at = ? WHERE status = 'queued' AND kind = 'scheduled'").run(t0).changes),
       shared: Number(db.prepare("UPDATE shared SET status = 'cleared' WHERE era = ? AND status = 'active'").run(sharedEra).changes),
     };
-    q.usage.run(0, (Date.now() - t0) / 1000, job.id);
+    q.usage.run(0, (Date.now() - t0) / 1000, null, job.id);
     q.finish.run("done", null, versionId, Date.now(), job.id);
     db.exec("COMMIT");
   } catch (err) {
@@ -1048,6 +1086,102 @@ function blankSlate(job) {
   }
   console.log(`#${job.id} → v${versionId} blank slate: ended ${counts.rules} rules, ${counts.lore} lore, ${counts.schedules} schedules ` +
     `(${counts.queued} queued runs), cleared ${counts.shared} shared "${forLog(job.text)}"`);
+}
+
+// A suggestion sent mid-thought (Enter sends): "make all" twice in 6 s (#669, #670), and the model made up a change
+// for each, one undoing the visitor's own gradient. Ends on a word no request ends on, or is two words at most ending
+// on one that needs more after it ("make all", "add some"; "remove them all" is fine). Not prepositions: "choose a
+// record to listen to" (#536) is a whole request.
+const DANGLING = /\b(the|a|an|and|or|but|than|my|your|their|very)\s*$/i;
+const DANGLING_SHORT = /^\s*\S+\s+(all|more|some|every|each|many|less)\s*$|^\s*(make|add|change|put|turn|give|let)\s*$/i;
+const unfinished = (text) => !parseRevert(text) && (DANGLING.test(text) || DANGLING_SHORT.test(text));
+
+// A suggestion that says outright it's a standing rule: "rule: …", "new rule - …". [1]: the rule itself.
+const RULE_ASK = /^\s*(?:new\s+|standing\s+|add\s+(?:a\s+)?(?:new\s+)?)?rule\s*[:\-–—]\s*(\S.*)$/is;
+
+// ---------- revert ----------
+// A suggestion that is only a revert, done by the server instead of the model rebuilding the old page from memory:
+// "revert" / "undo (that, the last change…)" undoes the latest version, "undo the last 3 edits" that many, and
+// "revert to v580" / "go back to v12" brings that version back. The old page comes back as a new version (history
+// stays append-only), noted "revert v<the earliest one undone>", so a revert right after another goes one further
+// back ("undo, undo"). Rules, lore and schedules the undone versions' suggestions made are ended, and rules and lore
+// they ended (or a blank slate one was) come back. A CHANGE RULE's old wording isn't kept, so that stays.
+// Returns null (not a revert) | { steps } | { to: version id }.
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const REVERT_VERB = String.raw`(?:please\s+)?(?:revert|undo|go\s+back|put\s+it\s+back|roll\s*back|restore)`;
+const REVERT_TAIL = String.raw`(?:\s+please)?[\s.!]*$`;
+const REVERT_ONE = new RegExp(String.raw`^\s*${REVERT_VERB}(?:\s+(?:it|that|this|(?:this|that|the)\s+(?:change|edit)|(?:the\s+)?(?:last|latest|previous)\s+(?:change|edit|one|version)|(?:the\s+)?changes?|one\s+(?:step|change|version)))?${REVERT_TAIL}`, "i");
+const REVERT_N = new RegExp(String.raw`^\s*${REVERT_VERB}\s+(?:the\s+)?(?:last\s+)?(\d+|${Object.keys(NUMBER_WORDS).join("|")})\s+(?:changes|edits|versions|steps)${REVERT_TAIL}`, "i");
+const REVERT_TO = new RegExp(String.raw`^\s*${REVERT_VERB}\s+(?:back\s+)?(?:to\s+)?(?:version\s*|v\s*)(\d+)${REVERT_TAIL}`, "i");
+function parseRevert(text) {
+  if (REVERT_ONE.test(text)) return { steps: 1 };
+  let m = REVERT_N.exec(text);
+  if (m) { const n = NUMBER_WORDS[m[1].toLowerCase()] ?? Number(m[1]); return n >= 1 && n <= 20 ? { steps: n } : null; }
+  // Not "undo v80": that means taking away what v80 did, which isn't bringing v80 back.
+  m = REVERT_TO.exec(text);
+  return m && !/^\s*(?:please\s+)?undo\b(?![\s\S]*\bto\b)/i.test(text) ? { to: Number(m[1]) } : null;
+}
+const prevVersion = db.prepare("SELECT id, html, errors, note, suggestion_id FROM versions WHERE id < ? ORDER BY id DESC LIMIT 1");
+const versionRow = db.prepare("SELECT id, html, errors, note, suggestion_id FROM versions WHERE id = ?");
+function revertLast(job, how) {
+  const t0 = Date.now();
+  const latest = versionRow.get(q.latest.get().id);
+  // target: the version that comes back; undone: the versions it takes away (their suggestions' rules and lore go).
+  let target = null, undone = [];
+  if (how.to) {
+    target = how.to < latest.id ? versionRow.get(how.to) : null;
+    if (target) undone = db.prepare("SELECT id, note, suggestion_id FROM versions WHERE id > ? ORDER BY id").all(target.id);
+  } else {
+    let pos = latest;
+    for (let i = 0; i < how.steps && pos; i++) {
+      for (let m; pos && (m = /^revert v(\d+)$/.exec(pos.note ?? "")); ) pos = prevVersion.get(Number(m[1]));
+      if (!pos) break;
+      undone.unshift(pos);
+      pos = prevVersion.get(pos.id);
+    }
+    target = undone.length === how.steps ? pos : null;
+  }
+  if (!target || !undone.length) {
+    const why = how.to ? (how.to >= latest.id ? `v${how.to} is the latest version or newer` : `there's no v${how.to}`)
+      : "there aren't that many earlier versions to go back to";
+    q.usage.run(0, 0, null, job.id);
+    q.finish.run("rejected", why, null, Date.now(), job.id);
+    console.log(`#${job.id} revert: ${why}`);
+    return;
+  }
+  const by = `revert #${job.id}`, notes = [];
+  let versionId;
+  db.exec("BEGIN");
+  try {
+    const first = undone[0], span = undone.length > 1 ? `v${first.id}–v${undone.at(-1).id}` : `v${first.id}`;
+    versionId = Number(q.insertVersion.run(target.html, job.id, `revert v${first.id}`, Buffer.byteLength(target.html), 0, t0,
+      target.errors, `Undoing ${span}: back to v${target.id}`).lastInsertRowid);
+    for (const sid of new Set(undone.map((v) => v.suggestion_id).filter(Boolean))) {
+      for (const t of ["rules", "lore", "schedules"]) {
+        const n = Number(db.prepare(`UPDATE ${t} SET status = 'ended', ended_at = ?, ended_by = ? WHERE suggestion_id = ? AND status = 'active'`).run(t0, by, sid).changes);
+        if (n) notes.push(`ended ${n} ${t}`);
+      }
+      for (const t of ["rules", "lore"]) {
+        const n = Number(db.prepare(`UPDATE ${t} SET status = 'active', ended_at = NULL, ended_by = NULL WHERE ended_by IN (?, ?)`)
+          .run(`suggestion #${sid}`, `blank slate #${sid}`).changes);
+        if (n) notes.push(`brought back ${n} ${t}`);
+      }
+    }
+    q.usage.run(0, (Date.now() - t0) / 1000, null, job.id);
+    q.finish.run("done", null, versionId, Date.now(), job.id);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    q.finish.run("failed", `revert failed: ${err.message}`, null, Date.now(), job.id);
+    console.log(`#${job.id} revert failed: ${err.message}`);
+    return;
+  }
+  drafted = null;
+  if (job.ip_hash && job.ip_hash !== "admin") {
+    let me = null;
+    for (const st of streams.values()) if (st.who === job.ip_hash) send(st.res, "me", me ??= meOf(st.who, st.v));
+  }
+  console.log(`#${job.id} → v${versionId} revert of ${undone.length} (back to v${target.id})${notes.length ? `: ${notes.join(", ")}` : ""} "${forLog(job.text)}"`);
 }
 
 // A finished version's CLEAR SHARED lines: every active item in those channels (this era's only) marked cleared,
@@ -1348,9 +1482,43 @@ function indexHtml(req) {
     .replace("</head>", () => `<script id="boot" type="application/json">${boot}</script>\n</head>`);
 }
 
+// ---------- reactions: the react button's short messages, sent to everyone here ----------
+// A set of a fixed greeting plus a few the model writes with the ideas after each version (lib/ideas.mjs), so they
+// fit the page and the room. A page sends one by its number in a set ({ set, i }), never its text, so all anyone
+// can send is what the server offered: no free text between visitors. The set before stays good for a little while
+// (a tap as a new set arrives). Each is sent at once to every other live page ("react" events: { id: the sender's
+// stream id, as in cursors; by: their visitor id; text; at }); the sender's page shows its own already. Not stored.
+// How often each was sent goes into the next set's prompt, then starts again.
+const REACT_GREETING = "👋 hi";
+const REACTIONS_MIN = 3;            // fewer good ones from the model: keep the set we have
+const REACT_OLD_MS = 15_000;        // the set before still accepted this long
+const REACT_BURST = 5, REACT_PER_SEC = 0.6;   // per visitor (all their tabs)
+let reactions = { id: 1, list: [REACT_GREETING] };
+let oldReactions = null, oldUntil = 0;
+const reactSent = new Map();        // text → times sent, for the set now
+function newReactions(list) {
+  oldReactions = reactions; oldUntil = Date.now() + REACT_OLD_MS;
+  reactions = { id: reactions.id + 1, list: [REACT_GREETING, ...list] };
+  reactSent.clear();
+}
+// Returns [status, body].
+function postReact(s, body) {
+  if (!s) return [410, { error: "no live connection" }];
+  const now = Date.now(), set = Number(body.set), i = Number(body.i);
+  const from = set === reactions.id ? reactions : set === oldReactions?.id && now < oldUntil ? oldReactions : null;
+  const text = from && Number.isInteger(i) ? from.list[i] : undefined;
+  if (text === undefined) return [409, { error: "not a current reaction" }];
+  if (!takeToken(`${s.who}:react`, now, REACT_BURST, REACT_PER_SEC)) return [429, { error: "too fast" }];
+  if (from === reactions) reactSent.set(text, (reactSent.get(text) ?? 0) + 1);
+  const f = frame("react", { id: s.id, by: s.v, text, at: now });
+  for (const o of streams.values()) if (o !== s) write(o.res, f);
+  return [200, { ok: true }];
+}
+
 // ---------- live connections: a WebSocket (/api/ws) or, as a fallback, an event stream (/api/events) ----------
 // Both get the same events (see write()); a WebSocket also takes the page's cursor and shared items as messages,
-// where an event stream page posts them (/api/cursor, /api/share, /api/unshare) with the token from its "hello".
+// where an event stream page posts them (/api/cursor, /api/share, /api/unshare, /api/react) with the token from its
+// "hello".
 const liveRoom = (who) => (streamsByIp.get(who) ?? 0) < STREAMS_PER_IP && clients.size < STREAMS_MAX;
 // Starts one; returns its cleanup (call once, when it closes).
 function openLive(c, ip) {
@@ -1379,8 +1547,8 @@ function openLive(c, ip) {
 
 // WebSockets. Browsers send Origin on the upgrade but no CORS check guards it, so any site could open one: only our
 // own page may. Small messages only (cursors, shared items), no compression (memory, and its past DoS bugs).
-// Messages: { t: "cursor", k, c }, { t: "share", ch, data, keep, key } and { t: "unshare", ch, key }, the same
-// bodies the HTTP routes take.
+// Messages: { t: "cursor", k, c }, { t: "share", ch, data, keep, key }, { t: "unshare", ch, key } and
+// { t: "react", set, i }, the same bodies the HTTP routes take.
 const wss = new WebSocketServer({ noServer: true, maxPayload: 2048, perMessageDeflate: false, clientTracking: false });
 const WS_MSGS_PER_SEC = 30;     // more than that from one socket closes it (a page posts ~8 a second at most)
 const WS_PING_MS = 25_000;      // Cloudflare drops a socket after 100 s of silence; also finds dead ones
@@ -1416,6 +1584,7 @@ function onUpgrade(req, socket, head) {
           if (m.t === "cursor") postCursor(c.stream, m);
           else if (m.t === "share") postShare(c.stream, m);
           else if (m.t === "unshare") postUnshare(c.stream, m);
+          else if (m.t === "react") postReact(c.stream, m);
         } catch (err) { console.log(`ws message failed: ${forLog(err.message)}`); }
       });
       ws.on("error", () => {});
@@ -1523,6 +1692,11 @@ const main = http.createServer(async (req, res) => {
       const [status, out] = postUnshare(streams.get(String(body?.token ?? "")), body);
       return json(res, status, out);
     }
+    if (req.method === "POST" && path === "/api/react") {
+      const body = await readJson(req, 300);
+      const [status, out] = postReact(streams.get(String(body?.token ?? "")), body);
+      return json(res, status, out);
+    }
     if (req.method === "GET" && path === "/api/shared") {
       const ch = url.searchParams.get("ch") ?? "";
       if (!CHANNEL.test(ch)) return json(res, 400, { error: "bad channel" });
@@ -1535,6 +1709,8 @@ const main = http.createServer(async (req, res) => {
       const text = cleanInput(body.text ?? "");
       if (!text) return json(res, 400, { error: "Write a suggestion first." });
       if (text.length > FEEDBACK_CAP) return json(res, 400, { error: `Keep it under ${FEEDBACK_CAP} characters.` });
+      // Before the human check, so its token isn't spent; the box keeps the text.
+      if (unfinished(text)) return json(res, 400, { error: "That looks unfinished. Finish the thought and send it again." });
       const h = admin ? "admin" : ipHash(clientIp(req));
       if (!admin) {
         if (q.queuedFromIp.get(h).n >= QUEUED_PER_VISITOR) return json(res, 429, { error: QUEUED_PER_VISITOR === 1
@@ -1748,7 +1924,7 @@ const sandbox = http.createServer((req, res) => {
 });
 
 // Fixed route names for the traffic counts (never the raw path, which anyone can make up).
-const MAIN_ROUTES = new Set(["/", "/api/state", "/api/events", "/api/history", "/api/suggest", "/api/cursor", "/api/share", "/api/unshare", "/api/shared"]);
+const MAIN_ROUTES = new Set(["/", "/api/state", "/api/events", "/api/history", "/api/suggest", "/api/cursor", "/api/share", "/api/unshare", "/api/react", "/api/shared"]);
 stats.track(main, "main", (p) => MAIN_ROUTES.has(p) ? p : STATIC[p] || p.startsWith("/favicon/") ? "assets" : p.startsWith("/api/") ? "/api/other" : "other");
 stats.track(sandbox, "sandbox", (p) => /^\/v\/\d+$/.test(p) ? "/v" : /^\/d\/\d+$/.test(p) ? "/d" : "other");
 
